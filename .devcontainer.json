@@ -1,8 +1,22 @@
 {
+  "name": "Ballerina MCP Server Development",
   "image": "ballerina/ballerina-devcontainer:2201.12.7",
   "customizations": {
     "vscode": {
-      "extensions": ["WSO2.ballerina"]
+      "extensions": [
+        "WSO2.ballerina",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "ms-vscode.vscode-json"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
     }
+  },
+  "postCreateCommand": "bal version && echo 'Ballerina MCP Server development environment ready!'",
+  "forwardPorts": [3000, 8080],
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
   }
 }
