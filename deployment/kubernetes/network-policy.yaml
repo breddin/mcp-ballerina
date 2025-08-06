@@ -1,0 +1,225 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-ballerina-network-policy
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/managed-by: gitops
+  annotations:
+    description: "Network policy for MCP Ballerina Server"
+    gitops.argoproj.io/sync-wave: "5"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-ballerina
+      app.kubernetes.io/component: server
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # Ingress rules - what can connect to the MCP Ballerina pods
+  ingress:
+  # Allow ingress controller traffic
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 8080
+  
+  # Allow monitoring traffic
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090
+  
+  # Allow load balancer health checks
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 8080
+  
+  # Allow inter-pod communication within same namespace
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: mcp-ballerina
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 9090
+  
+  # Allow specific external access (if needed)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: api-gateway
+    ports:
+    - protocol: TCP
+      port: 8080
+  
+  # Egress rules - what the MCP Ballerina pods can connect to
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # Allow access to PostgreSQL
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgresql
+    ports:
+    - protocol: TCP
+      port: 5432
+  
+  # Allow access to Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  
+  # Allow HTTPS egress for external APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Allow HTTP egress for external APIs (if needed)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+  
+  # Allow access to Kubernetes API server
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
+  
+  # Allow access to other services in the same namespace
+  - to:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 1024
+      endPort: 65535
+---
+# Network policy for PostgreSQL access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-ballerina-database-policy
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: database-policy
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Network policy for database access"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgresql
+  policyTypes:
+  - Ingress
+  ingress:
+  # Only allow MCP Ballerina pods to connect to PostgreSQL
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: mcp-ballerina
+    ports:
+    - protocol: TCP
+      port: 5432
+  # Allow monitoring access
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9187  # postgres_exporter port
+---
+# Network policy for Redis access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-ballerina-cache-policy
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: cache-policy
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Network policy for cache access"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes:
+  - Ingress
+  ingress:
+  # Only allow MCP Ballerina pods to connect to Redis
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: mcp-ballerina
+    ports:
+    - protocol: TCP
+      port: 6379
+  # Allow monitoring access
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9121  # redis_exporter port
+---
+# Deny-all default policy (optional, for enhanced security)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp-ballerina-default-deny
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: default-deny
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Default deny all network policy"
+spec:
+  podSelector: {}  # Selects all pods in the namespace
+  policyTypes:
+  - Ingress
+  - Egress
+  # No rules specified means deny all traffic
+  # This is overridden by more specific policies above

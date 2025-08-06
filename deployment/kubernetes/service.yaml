@@ -1,0 +1,155 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: service
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/managed-by: gitops
+  annotations:
+    description: "Main service for MCP Ballerina Server"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/health"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-interval: "30"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-timeout: "10"
+    service.beta.kubernetes.io/aws-load-balancer-healthy-threshold: "2"
+    service.beta.kubernetes.io/aws-load-balancer-unhealthy-threshold: "3"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+    gitops.argoproj.io/sync-wave: "1"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: server
+  ports:
+  - name: http
+    port: 80
+    targetPort: nginx-http
+    protocol: TCP
+    appProtocol: http
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP
+    appProtocol: https
+  - name: mcp-direct
+    port: 8080
+    targetPort: http
+    protocol: TCP
+    appProtocol: http
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-ballerina-metrics
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Metrics service for MCP Ballerina Server"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: server
+  ports:
+  - name: metrics
+    port: 9090
+    targetPort: metrics
+    protocol: TCP
+    appProtocol: http
+  clusterIP: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-ballerina-headless
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: headless
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Headless service for MCP Ballerina Server discovery"
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: server
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 8443
+    targetPort: https
+    protocol: TCP
+  - name: metrics
+    port: 9090
+    targetPort: metrics
+    protocol: TCP
+---
+# External LoadBalancer service (optional)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-ballerina-external
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: external
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "External LoadBalancer for MCP Ballerina Server"
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-path: "/health"
+    service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "80"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: "arn:aws:acm:us-west-2:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "https"
+    service.beta.kubernetes.io/aws-load-balancer-connection-draining-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-connection-draining-timeout: "60"
+    external-dns.alpha.kubernetes.io/hostname: "mcp-ballerina.example.com"
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: server
+  ports:
+  - name: http
+    port: 80
+    targetPort: nginx-http
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP
+  loadBalancerSourceRanges:
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+  externalTrafficPolicy: Local
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800

@@ -1,0 +1,518 @@
+# Default values for mcp-ballerina
+# This is a YAML-formatted file
+
+# Global configuration
+global:
+  # Image registry settings
+  imageRegistry: docker.io
+  imagePullSecrets: []
+  storageClass: ""
+  
+  # Common labels applied to all resources
+  commonLabels: {}
+  commonAnnotations: {}
+  
+  # Security context
+  securityContext:
+    enabled: true
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+
+# Application configuration
+app:
+  name: mcp-ballerina
+  version: "1.0.0"
+  environment: production
+  
+# Image configuration
+image:
+  registry: docker.io
+  repository: company/mcp-ballerina
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Nginx sidecar configuration
+nginx:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: nginx
+    tag: "1.25-alpine"
+    pullPolicy: IfNotPresent
+  
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# Deployment configuration
+deployment:
+  replicaCount: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  # Pod configuration
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+  
+  podLabels: {}
+  
+  # Security context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+      - ALL
+
+  # Node selection
+  nodeSelector: {}
+  tolerations: []
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - mcp-ballerina
+          topologyKey: kubernetes.io/hostname
+
+  # Resource configuration
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+      ephemeral-storage: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+      ephemeral-storage: 5Gi
+
+  # Environment variables
+  env:
+    JAVA_OPTS: "-Xmx1536m -Xms512m -XX:+UseG1GC -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+    BALLERINA_HOME: "/opt/ballerina"
+    SERVER_PORT: "8080"
+    METRICS_PORT: "9090"
+    LOG_LEVEL: "INFO"
+    ENVIRONMENT: "production"
+
+  # Liveness and readiness probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: http
+      scheme: HTTP
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 10
+    successThreshold: 1
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: http
+      scheme: HTTP
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 3
+
+  startupProbe:
+    httpGet:
+      path: /health
+      port: http
+      scheme: HTTP
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 6
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: nginx-http
+  httpsPort: 443
+  metricsPort: 9090
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  
+  # External LoadBalancer configuration
+  external:
+    enabled: false
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+    loadBalancerSourceRanges:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "100"
+    nginx.ingress.kubernetes.io/rate-limit-rps: "50"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  
+  hosts:
+  - host: mcp-ballerina.example.com
+    paths:
+    - path: /
+      pathType: Prefix
+  
+  tls:
+  - secretName: mcp-ballerina-tls
+    hosts:
+    - mcp-ballerina.example.com
+  
+  # Additional ingresses
+  additional: []
+
+# Autoscaling configuration
+autoscaling:
+  # Horizontal Pod Autoscaler
+  hpa:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    
+    # Advanced scaling behavior
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      scaleUp:
+        stabilizationWindowSeconds: 60
+        policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+    
+    # Custom metrics
+    customMetrics:
+    - type: Pods
+      pods:
+        metric:
+          name: mcp_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "100"
+
+  # Vertical Pod Autoscaler
+  vpa:
+    enabled: false
+    updateMode: "Auto"
+    minReplicas: 3
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+# Storage configuration
+persistence:
+  # Data volume
+  data:
+    enabled: true
+    storageClass: "fast-ssd"
+    accessMode: ReadWriteOnce
+    size: 50Gi
+    annotations: {}
+  
+  # Logs volume
+  logs:
+    enabled: true
+    storageClass: "standard"
+    accessMode: ReadWriteOnce
+    size: 20Gi
+    annotations: {}
+  
+  # Temporary volume
+  temp:
+    enabled: true
+    storageClass: "fast"
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    annotations: {}
+
+# Configuration management
+config:
+  # Server configuration
+  server:
+    host: "0.0.0.0"
+    port: 8080
+    environment: "production"
+    ssl:
+      enabled: true
+      port: 8443
+  
+  # Logging configuration
+  logging:
+    level: "INFO"
+    format: "json"
+    output: "stdout"
+    audit:
+      enabled: true
+      level: "INFO"
+  
+  # Metrics configuration
+  metrics:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+  
+  # Health check configuration
+  health:
+    enabled: true
+    path: "/health"
+  
+  # MCP configuration
+  mcp:
+    version: "1.0"
+    timeout: "30s"
+    max_connections: 1000
+    transport:
+      type: "stdio"
+      buffer_size: 8192
+  
+  # Database configuration
+  database:
+    type: "postgresql"
+    max_connections: 20
+    connection_timeout: "10s"
+    idle_timeout: "5m"
+  
+  # Cache configuration
+  cache:
+    enabled: true
+    type: "redis"
+    ttl: "1h"
+    max_size: "100MB"
+
+# Secrets configuration
+secrets:
+  # Existing secret to use (if provided, other secret configs are ignored)
+  existingSecret: ""
+  
+  # Database credentials
+  database:
+    url: "postgresql://user:pass@localhost:5432/mcp_ballerina"
+    username: "mcp_user"
+    password: "change_me_production"
+  
+  # Redis credentials
+  redis:
+    url: "redis://:change_me@localhost:6379/0"
+    password: "change_me_redis"
+  
+  # API keys and tokens
+  api:
+    key: "abcdefghijk"
+    jwtSecret: "super_secret_jwt_key_change_me"
+    encryptionKey: "encryption_key_32_bytes_long"
+  
+  # OAuth credentials
+  oauth:
+    clientId: "client_12345"
+    clientSecret: "secret_67890"
+
+# Service account configuration
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: true
+
+# RBAC configuration
+rbac:
+  create: true
+  rules:
+  - apiGroups: [""]
+    resources: ["pods", "configmaps", "secrets", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+# Monitoring configuration
+monitoring:
+  # ServiceMonitor for Prometheus
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /metrics
+    honorLabels: false
+    
+  # PrometheusRule for alerts
+  prometheusRule:
+    enabled: true
+    rules:
+      highErrorRate:
+        enabled: true
+        threshold: 0.1
+        duration: 5m
+      highResponseTime:
+        enabled: true
+        threshold: 1
+        duration: 5m
+      highCPU:
+        enabled: true
+        threshold: 0.8
+        duration: 10m
+      highMemory:
+        enabled: true
+        threshold: 0.9
+        duration: 10m
+
+# Dependency configurations
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "postgres_password"
+    username: "mcp_user"
+    password: "mcp_password"
+    database: "mcp_ballerina"
+  architecture: standalone
+  primary:
+    persistence:
+      enabled: true
+      size: 100Gi
+      storageClass: "fast-ssd"
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: "redis_password"
+  architecture: standalone
+  master:
+    persistence:
+      enabled: true
+      size: 50Gi
+      storageClass: "fast"
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+# Nginx Ingress Controller
+nginx-ingress:
+  enabled: false
+  controller:
+    service:
+      type: LoadBalancer
+
+# Cert Manager
+cert-manager:
+  enabled: false
+  installCRDs: true
+
+# Prometheus
+prometheus:
+  enabled: false
+  server:
+    persistentVolume:
+      enabled: true
+      size: 100Gi
+  alertmanager:
+    persistentVolume:
+      enabled: true
+      size: 20Gi
+
+# Grafana
+grafana:
+  enabled: false
+  persistence:
+    enabled: true
+    size: 20Gi
+  dashboards:
+    default:
+      mcp-ballerina:
+        gnetId: 12345
+        datasource: Prometheus
+
+# Network policies
+networkPolicy:
+  enabled: false
+  ingress:
+    enabled: true
+    from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+  egress:
+    enabled: true
+    to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector: {}
+      ports:
+      - protocol: TCP
+        port: 5432  # PostgreSQL
+      - protocol: TCP
+        port: 6379  # Redis
+
+# Tests
+tests:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: curlimages/curl
+    tag: latest
+    pullPolicy: IfNotPresent

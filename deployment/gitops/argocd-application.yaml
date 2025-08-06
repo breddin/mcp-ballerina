@@ -1,0 +1,305 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mcp-ballerina
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: argocd-application
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "ArgoCD Application for MCP Ballerina Server"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  
+  # Source configuration
+  source:
+    repoURL: https://github.com/example/mcp-ballerina
+    path: deployment/helm/mcp-ballerina
+    targetRevision: HEAD
+    helm:
+      # Helm values override
+      valueFiles:
+      - values.yaml
+      - values-production.yaml
+      values: |
+        global:
+          environment: production
+          imageRegistry: registry.company.com
+        
+        app:
+          environment: production
+        
+        image:
+          registry: registry.company.com
+          repository: mcp/mcp-ballerina
+          tag: "1.0.0"
+        
+        deployment:
+          replicaCount: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 4Gi
+        
+        autoscaling:
+          hpa:
+            enabled: true
+            minReplicas: 3
+            maxReplicas: 20
+        
+        ingress:
+          enabled: true
+          hosts:
+          - host: mcp-ballerina.production.company.com
+            paths:
+            - path: /
+              pathType: Prefix
+          tls:
+          - secretName: mcp-ballerina-tls
+            hosts:
+            - mcp-ballerina.production.company.com
+        
+        monitoring:
+          serviceMonitor:
+            enabled: true
+          prometheusRule:
+            enabled: true
+        
+        postgresql:
+          enabled: true
+          primary:
+            persistence:
+              size: 200Gi
+        
+        redis:
+          enabled: true
+          master:
+            persistence:
+              size: 100Gi
+  
+  # Destination configuration
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mcp-ballerina
+  
+  # Sync policy
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+    - CreateNamespace=true
+    - PrunePropagationPolicy=foreground
+    - PruneLast=true
+    - ApplyOutOfSyncOnly=true
+    - RespectIgnoreDifferences=true
+    - Replace=false
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  
+  # Revision history
+  revisionHistoryLimit: 10
+  
+  # Health check configuration
+  ignoreDifferences:
+  - group: apps
+    kind: Deployment
+    jsonPointers:
+    - /spec/replicas
+  - group: ""
+    kind: Service
+    jsonPointers:
+    - /spec/clusterIP
+  - group: ""
+    kind: Secret
+    jsonPointers:
+    - /data
+  
+  # Notification configuration
+  info:
+  - name: "Environment"
+    value: "Production"
+  - name: "Team"
+    value: "Platform Team"
+  - name: "Contact"
+    value: "platform-team@company.com"
+---
+# ArgoCD AppProject for MCP Ballerina
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: mcp-ballerina-project
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: argocd-project
+  annotations:
+    description: "ArgoCD Project for MCP Ballerina applications"
+spec:
+  description: "Project for MCP Ballerina Server and related applications"
+  
+  # Source repositories
+  sourceRepos:
+  - 'https://github.com/example/mcp-ballerina'
+  - 'https://charts.bitnami.com/bitnami'
+  - 'https://kubernetes.github.io/ingress-nginx'
+  - 'https://charts.jetstack.io'
+  - 'https://prometheus-community.github.io/helm-charts'
+  - 'https://grafana.github.io/helm-charts'
+  
+  # Destination clusters and namespaces
+  destinations:
+  - namespace: 'mcp-ballerina*'
+    server: https://kubernetes.default.svc
+  - namespace: 'monitoring'
+    server: https://kubernetes.default.svc
+  - namespace: 'ingress-nginx'
+    server: https://kubernetes.default.svc
+  
+  # Cluster resource whitelist
+  clusterResourceWhitelist:
+  - group: ''
+    kind: Namespace
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRole
+  - group: rbac.authorization.k8s.io
+    kind: ClusterRoleBinding
+  - group: apiextensions.k8s.io
+    kind: CustomResourceDefinition
+  - group: storage.k8s.io
+    kind: StorageClass
+  
+  # Namespace resource whitelist
+  namespaceResourceWhitelist:
+  - group: ''
+    kind: ConfigMap
+  - group: ''
+    kind: Secret
+  - group: ''
+    kind: Service
+  - group: ''
+    kind: ServiceAccount
+  - group: ''
+    kind: PersistentVolumeClaim
+  - group: apps
+    kind: Deployment
+  - group: apps
+    kind: StatefulSet
+  - group: apps
+    kind: ReplicaSet
+  - group: networking.k8s.io
+    kind: Ingress
+  - group: networking.k8s.io
+    kind: NetworkPolicy
+  - group: policy
+    kind: PodDisruptionBudget
+  - group: autoscaling
+    kind: HorizontalPodAutoscaler
+  - group: autoscaling.k8s.io
+    kind: VerticalPodAutoscaler
+  - group: monitoring.coreos.com
+    kind: ServiceMonitor
+  - group: monitoring.coreos.com
+    kind: PrometheusRule
+  - group: cert-manager.io
+    kind: Certificate
+  - group: cert-manager.io
+    kind: Issuer
+  
+  # RBAC roles
+  roles:
+  - name: readonly
+    description: Read-only privileges to mcp-ballerina project
+    policies:
+    - p, proj:mcp-ballerina-project:readonly, applications, get, mcp-ballerina-project/*, allow
+    - p, proj:mcp-ballerina-project:readonly, repositories, get, *, allow
+    - p, proj:mcp-ballerina-project:readonly, logs, get, mcp-ballerina-project/*, allow
+    groups:
+    - company:mcp-team-readonly
+  
+  - name: admin
+    description: Admin privileges to mcp-ballerina project
+    policies:
+    - p, proj:mcp-ballerina-project:admin, applications, *, mcp-ballerina-project/*, allow
+    - p, proj:mcp-ballerina-project:admin, repositories, *, *, allow
+    - p, proj:mcp-ballerina-project:admin, logs, get, mcp-ballerina-project/*, allow
+    - p, proj:mcp-ballerina-project:admin, exec, create, mcp-ballerina-project/*, allow
+    groups:
+    - company:mcp-team-admin
+    - company:platform-team
+  
+  # Sync windows
+  syncWindows:
+  - kind: allow
+    schedule: '0 9-17 * * 1-5'  # 9 AM to 5 PM, Monday to Friday
+    duration: 8h
+    applications:
+    - mcp-ballerina
+    namespaces:
+    - mcp-ballerina
+    clusters:
+    - https://kubernetes.default.svc
+  - kind: deny
+    schedule: '0 22-6 * * *'  # 10 PM to 6 AM
+    duration: 8h
+    applications:
+    - mcp-ballerina
+    namespaces:
+    - mcp-ballerina
+    clusters:
+    - https://kubernetes.default.svc
+---
+# ArgoCD Repository configuration
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-ballerina-repo
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: repository
+  annotations:
+    description: "Repository credentials for MCP Ballerina"
+type: Opaque
+stringData:
+  type: git
+  url: https://github.com/example/mcp-ballerina
+  password: your-github-token
+  username: your-github-username
+---
+# ArgoCD Cluster configuration
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mcp-ballerina-cluster
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: cluster
+  annotations:
+    description: "Cluster configuration for MCP Ballerina"
+type: Opaque
+stringData:
+  name: production
+  server: https://kubernetes.default.svc
+  config: |
+    {
+      "bearerToken": "<service-account-token>",
+      "tlsClientConfig": {
+        "insecure": false,
+        "caData": "<base64-encoded-ca-cert>"
+      }
+    }

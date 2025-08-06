@@ -1,0 +1,234 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/managed-by: gitops
+  annotations:
+    description: "Ingress for MCP Ballerina Server"
+    # Nginx Ingress Controller annotations
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-buffering: "on"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "8k"
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "1m"
+    
+    # Rate limiting
+    nginx.ingress.kubernetes.io/rate-limit-connections: "100"
+    nginx.ingress.kubernetes.io/rate-limit-rps: "50"
+    nginx.ingress.kubernetes.io/rate-limit-rpm: "1000"
+    
+    # CORS
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://example.com,https://app.example.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET,POST,PUT,DELETE,OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+    nginx.ingress.kubernetes.io/cors-max-age: "86400"
+    
+    # Security headers
+    nginx.ingress.kubernetes.io/server-snippet: |
+      more_set_headers "X-Frame-Options: SAMEORIGIN";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'";
+    
+    # Certificate management
+    cert-manager.io/issuer: "letsencrypt-prod"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    
+    # External DNS
+    external-dns.alpha.kubernetes.io/hostname: "mcp-ballerina.example.com"
+    external-dns.alpha.kubernetes.io/ttl: "300"
+    
+    # GitOps
+    gitops.argoproj.io/sync-wave: "2"
+spec:
+  tls:
+  - hosts:
+    - mcp-ballerina.example.com
+    - api.mcp-ballerina.example.com
+    secretName: mcp-ballerina-tls
+  rules:
+  - host: mcp-ballerina.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mcp-ballerina
+            port:
+              number: 80
+      - path: /health
+        pathType: Exact
+        backend:
+          service:
+            name: mcp-ballerina
+            port:
+              number: 80
+      - path: /metrics
+        pathType: Exact
+        backend:
+          service:
+            name: mcp-ballerina-metrics
+            port:
+              number: 9090
+  - host: api.mcp-ballerina.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mcp-ballerina
+            port:
+              number: 80
+---
+# Alternative ingress for different environments
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-ballerina-staging
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/environment: staging
+  annotations:
+    description: "Staging ingress for MCP Ballerina Server"
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: mcp-ballerina-auth
+    nginx.ingress.kubernetes.io/auth-realm: "MCP Ballerina Staging - Authentication Required"
+    cert-manager.io/cluster-issuer: "letsencrypt-staging"
+spec:
+  tls:
+  - hosts:
+    - staging.mcp-ballerina.example.com
+    secretName: mcp-ballerina-staging-tls
+  rules:
+  - host: staging.mcp-ballerina.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mcp-ballerina
+            port:
+              number: 80
+---
+# AWS ALB Ingress (alternative)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-ballerina-alb
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: alb-ingress
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "AWS ALB Ingress for MCP Ballerina Server"
+    kubernetes.io/ingress.class: "alb"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/load-balancer-name: mcp-ballerina-alb
+    alb.ingress.kubernetes.io/group.name: mcp-services
+    alb.ingress.kubernetes.io/group.order: "100"
+    
+    # Health checks
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "10"
+    alb.ingress.kubernetes.io/healthy-threshold-count: "2"
+    alb.ingress.kubernetes.io/unhealthy-threshold-count: "3"
+    alb.ingress.kubernetes.io/success-codes: "200"
+    
+    # SSL
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:us-west-2:123456789012:certificate/12345678-1234-1234-1234-123456789012"
+    alb.ingress.kubernetes.io/ssl-policy: "ELBSecurityPolicy-TLS-1-2-2017-01"
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    
+    # Security
+    alb.ingress.kubernetes.io/wafv2-acl-arn: "arn:aws:wafv2:us-west-2:123456789012:regional/webacl/mcp-protection/12345678-1234-1234-1234-123456789012"
+    
+    # Performance
+    alb.ingress.kubernetes.io/target-group-attributes: |
+      stickiness.enabled=true,
+      stickiness.lb_cookie.duration_seconds=3600,
+      load_balancing.algorithm.type=least_outstanding_requests
+spec:
+  tls:
+  - hosts:
+    - mcp-ballerina.example.com
+  rules:
+  - host: mcp-ballerina.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: mcp-ballerina
+            port:
+              number: 80
+---
+# Internal ingress for admin/metrics access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp-ballerina-admin
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: admin-ingress
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Admin ingress for MCP Ballerina Server"
+    kubernetes.io/ingress.class: "nginx-internal"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: mcp-ballerina-admin-auth
+    nginx.ingress.kubernetes.io/auth-realm: "MCP Ballerina Admin - Authentication Required"
+    cert-manager.io/cluster-issuer: "ca-issuer"
+spec:
+  tls:
+  - hosts:
+    - admin.mcp-ballerina.internal
+    secretName: mcp-ballerina-admin-tls
+  rules:
+  - host: admin.mcp-ballerina.internal
+    http:
+      paths:
+      - path: /metrics
+        pathType: Prefix
+        backend:
+          service:
+            name: mcp-ballerina-metrics
+            port:
+              number: 9090
+      - path: /admin
+        pathType: Prefix
+        backend:
+          service:
+            name: mcp-ballerina
+            port:
+              number: 80

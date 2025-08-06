@@ -1,0 +1,103 @@
+apiVersion: v2
+name: mcp-ballerina
+description: A Helm chart for MCP Ballerina Server - Model Context Protocol implementation in Ballerina
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+# Chart metadata
+keywords:
+  - mcp
+  - ballerina
+  - model-context-protocol
+  - api
+  - microservices
+  - cloud-native
+
+home: https://github.com/example/mcp-ballerina
+sources:
+  - https://github.com/example/mcp-ballerina
+
+maintainers:
+  - name: Platform Team
+    email: platform-team@company.com
+    url: https://company.com
+  - name: DevOps Team
+    email: devops@company.com
+
+# Chart dependencies
+dependencies:
+  - name: postgresql
+    version: "12.1.9"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+    tags:
+      - database
+  - name: redis
+    version: "17.4.3"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+    tags:
+      - cache
+  - name: nginx-ingress
+    version: "4.4.2"
+    repository: https://kubernetes.github.io/ingress-nginx
+    condition: nginx-ingress.enabled
+    tags:
+      - ingress
+  - name: cert-manager
+    version: "v1.13.3"
+    repository: https://charts.jetstack.io
+    condition: cert-manager.enabled
+    tags:
+      - tls
+  - name: prometheus
+    version: "15.18.0"
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: prometheus.enabled
+    tags:
+      - monitoring
+  - name: grafana
+    version: "6.50.7"
+    repository: https://grafana.github.io/helm-charts
+    condition: grafana.enabled
+    tags:
+      - monitoring
+
+# Annotations for additional metadata
+annotations:
+  category: Application
+  licenses: Apache-2.0
+  images: |
+    - name: mcp-ballerina
+      image: docker.io/company/mcp-ballerina:1.0.0
+    - name: nginx
+      image: docker.io/nginx:1.25-alpine
+  artifacthub.io/operator: "false"
+  artifacthub.io/operatorCapabilities: Basic Install
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial release of MCP Ballerina Server Helm chart
+    - kind: added
+      description: Support for horizontal and vertical pod autoscaling
+    - kind: added
+      description: Prometheus monitoring and alerting
+    - kind: added
+      description: PostgreSQL and Redis dependencies
+    - kind: added
+      description: SSL/TLS support with cert-manager
+    - kind: added
+      description: Multi-environment configurations
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://docs.company.com/mcp-ballerina
+    - name: Source Code
+      url: https://github.com/example/mcp-ballerina
+    - name: Support
+      url: https://support.company.com
+  artifacthub.io/screenshots: |
+    - title: Dashboard Overview
+      url: https://docs.company.com/mcp-ballerina/images/dashboard.png
+    - title: Metrics Visualization
+      url: https://docs.company.com/mcp-ballerina/images/metrics.png

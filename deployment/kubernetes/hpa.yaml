@@ -1,0 +1,277 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/managed-by: gitops
+  annotations:
+    description: "Horizontal Pod Autoscaler for MCP Ballerina Server"
+    gitops.argoproj.io/sync-wave: "3"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mcp-ballerina
+  minReplicas: 3
+  maxReplicas: 20
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+      - type: Pods
+        value: 4
+        periodSeconds: 30
+      selectPolicy: Max
+  metrics:
+  # CPU utilization
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  # Memory utilization
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  # Custom metrics
+  - type: Pods
+    pods:
+      metric:
+        name: mcp_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "100"
+  - type: Pods
+    pods:
+      metric:
+        name: mcp_response_time_95th_percentile
+      target:
+        type: AverageValue
+        averageValue: "500m"
+---
+# Vertical Pod Autoscaler (VPA)
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: vpa
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Vertical Pod Autoscaler for MCP Ballerina Server"
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mcp-ballerina
+  updatePolicy:
+    updateMode: "Auto"
+    minReplicas: 3
+  resourcePolicy:
+    containerPolicies:
+    - containerName: mcp-ballerina
+      minAllowed:
+        cpu: 100m
+        memory: 256Mi
+      maxAllowed:
+        cpu: 2
+        memory: 4Gi
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+    - containerName: nginx
+      minAllowed:
+        cpu: 50m
+        memory: 64Mi
+      maxAllowed:
+        cpu: 500m
+        memory: 512Mi
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: pdb
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Pod Disruption Budget for MCP Ballerina Server"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-ballerina
+      app.kubernetes.io/component: server
+  minAvailable: 2
+  unhealthyPodEvictionPolicy: AlwaysAllow
+---
+# KEDA ScaledObject (alternative/additional to HPA)
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: mcp-ballerina-keda
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: keda
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "KEDA ScaledObject for MCP Ballerina Server"
+spec:
+  scaleTargetRef:
+    name: mcp-ballerina
+  pollingInterval: 30
+  cooldownPeriod: 300
+  idleReplicaCount: 3
+  minReplicaCount: 3
+  maxReplicaCount: 50
+  fallback:
+    failureThreshold: 3
+    replicas: 6
+  advanced:
+    restoreToOriginalReplicaCount: true
+    horizontalPodAutoscalerConfig:
+      name: mcp-ballerina-keda-hpa
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+          - type: Percent
+            value: 50
+            periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies:
+          - type: Percent
+            value: 100
+            periodSeconds: 30
+  triggers:
+  # Prometheus-based scaling
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring.svc.cluster.local:9090
+      metricName: mcp_ballerina_requests_per_second
+      threshold: '100'
+      query: rate(mcp_ballerina_http_requests_total[5m])
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus.monitoring.svc.cluster.local:9090
+      metricName: mcp_ballerina_response_time
+      threshold: '500'
+      query: histogram_quantile(0.95, rate(mcp_ballerina_http_request_duration_seconds_bucket[5m])) * 1000
+  # CPU-based scaling
+  - type: cpu
+    metadata:
+      type: Utilization
+      value: '70'
+  # Memory-based scaling
+  - type: memory
+    metadata:
+      type: Utilization
+      value: '80'
+  # Queue-based scaling (if using message queues)
+  - type: rabbitmq
+    metadata:
+      protocol: amqp
+      host: rabbitmq.messaging.svc.cluster.local:5672
+      vhostName: /
+      queueName: mcp-tasks
+      queueLength: '10'
+    authenticationRef:
+      name: rabbitmq-auth
+  # Database connection pool scaling
+  - type: postgresql
+    metadata:
+      connectionString: postgresql://user:pass@postgres.database.svc.cluster.local:5432/mcpdb
+      query: SELECT COUNT(*) FROM pg_stat_activity WHERE state = 'active'
+      targetQueryValue: '80'
+    authenticationRef:
+      name: postgres-auth
+---
+# Custom Resource for advanced scaling policies
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-ballerina-scaling-policy
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: scaling-policy
+data:
+  policy.yaml: |
+    scaling:
+      metrics:
+        - name: cpu_utilization
+          weight: 30
+          threshold: 70
+          scale_up_factor: 1.5
+          scale_down_factor: 0.7
+        - name: memory_utilization
+          weight: 25
+          threshold: 80
+          scale_up_factor: 1.3
+          scale_down_factor: 0.8
+        - name: requests_per_second
+          weight: 25
+          threshold: 100
+          scale_up_factor: 2.0
+          scale_down_factor: 0.5
+        - name: response_time_95th
+          weight: 20
+          threshold: 500
+          scale_up_factor: 1.8
+          scale_down_factor: 0.6
+      
+      rules:
+        - condition: "cpu > 90 OR memory > 95"
+          action: "emergency_scale"
+          replicas: "+50%"
+          cooldown: 60
+        - condition: "requests_per_second > 200"
+          action: "rapid_scale"
+          replicas: "+100%"
+          cooldown: 30
+        - condition: "response_time_95th > 1000"
+          action: "performance_scale"
+          replicas: "+75%"
+          cooldown: 45
+      
+      schedule:
+        - time: "09:00"
+          action: "scale_up"
+          min_replicas: 5
+          description: "Morning traffic peak"
+        - time: "18:00"
+          action: "scale_up"
+          min_replicas: 7
+          description: "Evening traffic peak"
+        - time: "02:00"
+          action: "scale_down"
+          min_replicas: 3
+          description: "Night time minimum"

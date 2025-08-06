@@ -1,0 +1,81 @@
+{{- if .Values.ingress.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingress
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "Ingress for MCP Ballerina Server"
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- include "mcp-ballerina.ingressTLS" . | nindent 2 }}
+  rules:
+  {{- range .Values.ingress.hosts }}
+  - host: {{ .host | quote }}
+    http:
+      paths:
+      {{- range .paths }}
+      - path: {{ .path }}
+        pathType: {{ .pathType }}
+        backend:
+          service:
+            name: {{ include "mcp-ballerina.fullname" $ }}
+            port:
+              number: {{ $.Values.service.port }}
+      {{- end }}
+  {{- end }}
+{{- end }}
+{{- range .Values.ingress.additional }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "mcp-ballerina.fullname" $ }}-{{ .name }}
+  labels:
+    {{- include "mcp-ballerina.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: ingress
+    ingress-type: {{ .name }}
+  annotations:
+    {{- include "mcp-ballerina.annotations" $ | nindent 4 }}
+    description: "{{ .description | default (printf "Additional ingress for MCP Ballerina Server: %s" .name) }}"
+    {{- with .annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .className }}
+  ingressClassName: {{ .className }}
+  {{- end }}
+  {{- if .tls }}
+  tls:
+  {{- range .tls }}
+  - hosts:
+    {{- range .hosts }}
+    - {{ . | quote }}
+    {{- end }}
+    secretName: {{ .secretName }}
+  {{- end }}
+  {{- end }}
+  rules:
+  {{- range .hosts }}
+  - host: {{ .host | quote }}
+    http:
+      paths:
+      {{- range .paths }}
+      - path: {{ .path }}
+        pathType: {{ .pathType }}
+        backend:
+          service:
+            name: {{ .serviceName | default (include "mcp-ballerina.fullname" $) }}
+            port:
+              number: {{ .servicePort | default $.Values.service.port }}
+      {{- end }}
+  {{- end }}
+{{- end }}

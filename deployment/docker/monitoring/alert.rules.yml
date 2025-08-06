@@ -1,0 +1,47 @@
+groups:
+  - name: mcp-ballerina-alerts
+    rules:
+      - alert: MCPServerDown
+        expr: up{job="mcp-ballerina-server"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MCP Ballerina server is down"
+          description: "MCP Ballerina server has been down for more than 1 minute."
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value }} errors per second."
+
+      - alert: HighMemoryUsage
+        expr: (process_resident_memory_bytes / 1024 / 1024) > 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value }}MB."
+
+      - alert: HighCPUUsage
+        expr: rate(process_cpu_seconds_total[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value | humanizePercentage }}."
+
+      - alert: ResponseTimeHigh
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response time"
+          description: "95th percentile response time is {{ $value }}s."

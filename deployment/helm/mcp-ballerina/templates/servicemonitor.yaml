@@ -1,0 +1,46 @@
+{{- if and .Values.monitoring.serviceMonitor.enabled .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: servicemonitor
+    prometheus: kube-prometheus
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "ServiceMonitor for MCP Ballerina Server metrics"
+spec:
+  selector:
+    matchLabels:
+      {{- include "mcp-ballerina.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: metrics
+  endpoints:
+  - port: metrics
+    path: {{ .Values.monitoring.serviceMonitor.path }}
+    interval: {{ .Values.monitoring.serviceMonitor.interval }}
+    scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+    honorLabels: {{ .Values.monitoring.serviceMonitor.honorLabels }}
+    scheme: http
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: 'mcp_ballerina_.*'
+      targetLabel: service
+      replacement: {{ include "mcp-ballerina.name" . }}
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod_name
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node_name
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: kubernetes_namespace
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_service_name]
+      targetLabel: service_name
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_pod_container_name]
+      targetLabel: container
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+{{- end }}

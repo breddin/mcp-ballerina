@@ -1,0 +1,396 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as prerelease'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+
+jobs:
+  validate-release:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is-prerelease: ${{ steps.version.outputs.is-prerelease }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version information
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+            IS_PRERELEASE="${{ github.event.inputs.prerelease }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+            # Check if it's a prerelease (contains alpha, beta, rc, dev)
+            if [[ "$VERSION" =~ (alpha|beta|rc|dev) ]]; then
+              IS_PRERELEASE="true"
+            else
+              IS_PRERELEASE="false"
+            fi
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is-prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION"
+          echo "Is prerelease: $IS_PRERELEASE"
+
+      - name: Validate semantic version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.-]+)?$ ]]; then
+            echo "❌ Invalid semantic version: $VERSION"
+            echo "Version must match pattern: v1.2.3 or v1.2.3-alpha.1"
+            exit 1
+          fi
+          echo "✅ Valid semantic version: $VERSION"
+
+  build-release:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: validate-release
+    strategy:
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64]
+        exclude:
+          - os: windows
+            arch: arm64
+            
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Ballerina
+        uses: ballerina-platform/setup-ballerina@v1.1.0
+        with:
+          version: latest
+
+      - name: Cache Ballerina dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ballerina/repositories
+            ~/.ballerina/caches
+          key: ${{ runner.os }}-ballerina-release-${{ hashFiles('**/Dependencies.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-ballerina-release-
+            ${{ runner.os }}-ballerina-
+
+      - name: Update version in Ballerina.toml
+        run: |
+          cd ballerina-mcp-server
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          VERSION_NUMBER="${VERSION#v}"
+          
+          # Update version in Ballerina.toml
+          if [ -f "Ballerina.toml" ]; then
+            sed -i.bak "s/version = \".*\"/version = \"$VERSION_NUMBER\"/" Ballerina.toml
+            rm Ballerina.toml.bak || true
+          fi
+
+      - name: Build for platform
+        run: |
+          cd ballerina-mcp-server
+          
+          # Build the project
+          bal build
+          
+          # Create platform-specific package
+          mkdir -p release-artifacts
+          
+          ARTIFACT_NAME="mcp-ballerina-server-${{ needs.validate-release.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}"
+          
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            ARTIFACT_NAME="${ARTIFACT_NAME}.zip"
+            # Create zip for Windows
+            cd target && zip -r "../release-artifacts/${ARTIFACT_NAME}" . && cd ..
+          else
+            ARTIFACT_NAME="${ARTIFACT_NAME}.tar.gz"
+            # Create tar.gz for Unix-like systems
+            cd target && tar -czf "../release-artifacts/${ARTIFACT_NAME}" . && cd ..
+          fi
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-${{ matrix.os }}-${{ matrix.arch }}
+          path: ballerina-mcp-server/release-artifacts/
+
+  build-docker:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+    needs: validate-release
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub (if configured)
+        if: secrets.DOCKERHUB_USERNAME && secrets.DOCKERHUB_TOKEN
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Setup Ballerina
+        uses: ballerina-platform/setup-ballerina@v1.1.0
+        with:
+          version: latest
+
+      - name: Update version in Ballerina.toml
+        run: |
+          cd ballerina-mcp-server
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          VERSION_NUMBER="${VERSION#v}"
+          
+          if [ -f "Ballerina.toml" ]; then
+            sed -i.bak "s/version = \".*\"/version = \"$VERSION_NUMBER\"/" Ballerina.toml
+            rm Ballerina.toml.bak || true
+          fi
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ secrets.DOCKERHUB_USERNAME && format('{0}/mcp-ballerina-server', secrets.DOCKERHUB_USERNAME) || '' }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.validate-release.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-release.outputs.version }}
+            type=semver,pattern={{major}},value=${{ needs.validate-release.outputs.version }},enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./ballerina-mcp-server
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.validate-release.outputs.version }}
+
+  generate-changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    needs: validate-release
+    outputs:
+      changelog: ${{ steps.changelog.outputs.changelog }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          
+          # Get the previous tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+          
+          echo "Generating changelog from $PREVIOUS_TAG to $VERSION"
+          
+          # Generate changelog content
+          {
+            echo "## What's Changed"
+            echo ""
+            
+            if [ -n "$PREVIOUS_TAG" ]; then
+              # Get commits between tags
+              git log --pretty=format:"* %s (%an) - %h" $PREVIOUS_TAG..HEAD | grep -v "^$"
+            else
+              # First release, show recent commits
+              git log --pretty=format:"* %s (%an) - %h" --max-count=20 | grep -v "^$"
+            fi
+            
+            echo ""
+            echo "## New Features"
+            git log --pretty=format:"* %s (%an) - %h" $PREVIOUS_TAG..HEAD | grep -i "feat\|feature\|add" || echo "* No new features in this release"
+            
+            echo ""
+            echo "## Bug Fixes"
+            git log --pretty=format:"* %s (%an) - %h" $PREVIOUS_TAG..HEAD | grep -i "fix\|bug" || echo "* No bug fixes in this release"
+            
+            echo ""
+            echo "## Performance Improvements"
+            git log --pretty=format:"* %s (%an) - %h" $PREVIOUS_TAG..HEAD | grep -i "perf\|performance\|optimize" || echo "* No performance improvements in this release"
+            
+            echo ""
+            echo "---"
+            echo ""
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/$PREVIOUS_TAG...$VERSION"
+            
+          } > CHANGELOG.md
+          
+          # Set output for use in release
+          {
+            echo 'changelog<<EOF'
+            cat CHANGELOG.md
+            echo EOF
+          } >> $GITHUB_OUTPUT
+
+      - name: Upload changelog
+        uses: actions/upload-artifact@v3
+        with:
+          name: changelog
+          path: CHANGELOG.md
+
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-release, build-docker, generate-changelog]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./release-artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p final-assets
+          find ./release-artifacts -name "*.tar.gz" -o -name "*.zip" | xargs -I {} cp {} final-assets/
+          
+          # Create checksums
+          cd final-assets
+          sha256sum * > checksums.txt
+          cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.validate-release.outputs.version }}
+          name: Release ${{ needs.validate-release.outputs.version }}
+          body: ${{ needs.generate-changelog.outputs.changelog }}
+          prerelease: ${{ needs.validate-release.outputs.is-prerelease == 'true' }}
+          files: |
+            final-assets/*
+          generate_release_notes: true
+          make_latest: ${{ needs.validate-release.outputs.is-prerelease == 'false' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-package:
+    name: Publish Ballerina Package
+    runs-on: ubuntu-latest
+    needs: [validate-release, create-release]
+    if: needs.validate-release.outputs.is-prerelease == 'false'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Ballerina
+        uses: ballerina-platform/setup-ballerina@v1.1.0
+        with:
+          version: latest
+
+      - name: Cache Ballerina dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ballerina/repositories
+            ~/.ballerina/caches
+          key: ${{ runner.os }}-ballerina-publish-${{ hashFiles('**/Dependencies.toml') }}
+
+      - name: Update version
+        run: |
+          cd ballerina-mcp-server
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          VERSION_NUMBER="${VERSION#v}"
+          
+          if [ -f "Ballerina.toml" ]; then
+            sed -i.bak "s/version = \".*\"/version = \"$VERSION_NUMBER\"/" Ballerina.toml
+            rm Ballerina.toml.bak || true
+          fi
+
+      - name: Build and publish package
+        env:
+          BALLERINA_CENTRAL_ACCESS_TOKEN: ${{ secrets.BALLERINA_CENTRAL_TOKEN }}
+        run: |
+          cd ballerina-mcp-server
+          
+          # Configure Ballerina Central access token if provided
+          if [ -n "$BALLERINA_CENTRAL_ACCESS_TOKEN" ]; then
+            bal push
+          else
+            echo "⚠️  BALLERINA_CENTRAL_TOKEN not configured, skipping package publish"
+            echo "To publish to Ballerina Central, add BALLERINA_CENTRAL_TOKEN secret"
+          fi
+
+  notify-release:
+    name: Notify Release Completion
+    runs-on: ubuntu-latest
+    needs: [validate-release, create-release, publish-package]
+    if: always()
+    
+    steps:
+      - name: Notify success
+        if: needs.create-release.result == 'success'
+        run: |
+          echo "🚀 Release ${{ needs.validate-release.outputs.version }} completed successfully!"
+          echo ""
+          echo "✅ GitHub release created"
+          echo "✅ Docker images pushed"
+          echo "✅ Release artifacts uploaded"
+          
+          if [[ "${{ needs.publish-package.result }}" == "success" ]]; then
+            echo "✅ Ballerina package published"
+          fi
+
+      - name: Notify failure
+        if: needs.create-release.result == 'failure'
+        run: |
+          echo "❌ Release ${{ needs.validate-release.outputs.version }} failed!"
+          echo ""
+          echo "Please check the workflow logs and try again."
+          exit 1

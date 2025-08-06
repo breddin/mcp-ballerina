@@ -1,0 +1,221 @@
+# Workflow Configuration
+# This file contains shared configuration for GitHub Actions workflows
+
+# Global environment variables
+env:
+  # Container registry configuration
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  
+  # Ballerina configuration
+  BALLERINA_VERSION: latest
+  BALLERINA_FALLBACK_VERSION: "2201.8.0"
+  
+  # Build configuration
+  NODE_VERSION: "18"
+  JAVA_VERSION: "17"
+  
+  # Cache configuration
+  CACHE_VERSION: v1
+  CACHE_PATHS: |
+    ~/.ballerina/repositories
+    ~/.ballerina/caches
+    ~/.m2/repository
+    ~/.gradle/caches
+    ~/.gradle/wrapper
+  
+  # Security configuration
+  TRIVY_SEVERITY: "CRITICAL,HIGH,MEDIUM"
+  SNYK_SEVERITY_THRESHOLD: high
+  
+  # Quality thresholds
+  CODE_COVERAGE_THRESHOLD: 80
+  DOCUMENTATION_COVERAGE_THRESHOLD: 50
+  
+  # Notification configuration
+  NOTIFY_ON_FAILURE: true
+  NOTIFY_ON_SUCCESS: false
+
+# Common job configurations
+jobs:
+  # Default matrix configuration
+  matrix:
+    ballerina-version: ['2201.8.0', 'latest']
+    os: [ubuntu-latest, macos-latest, windows-latest]
+    
+  # Exclude problematic combinations
+  exclude:
+    - os: windows-latest
+      ballerina-version: '2201.8.0'  # Skip old version on Windows
+  
+  # Default timeouts (in minutes)
+  timeouts:
+    build: 30
+    test: 45
+    security-scan: 20
+    docker-build: 60
+    
+  # Default retry configuration
+  retry:
+    max-attempts: 3
+    retry-on: failure
+
+# Security configuration
+security:
+  # Required permissions for workflows
+  permissions:
+    contents: read
+    packages: write
+    security-events: write
+    pull-requests: write
+    issues: write
+    
+  # SARIF upload configuration
+  sarif:
+    upload-to-security-tab: true
+    fail-on-error: false
+    
+  # Dependency scanning
+  dependency-review:
+    fail-on-severity: moderate
+    allow-licenses:
+      - MIT
+      - Apache-2.0
+      - BSD-2-Clause
+      - BSD-3-Clause
+      - ISC
+    deny-licenses:
+      - GPL-2.0
+      - GPL-3.0
+      - AGPL-3.0
+
+# Artifact configuration
+artifacts:
+  # Default retention days
+  retention-days: 30
+  
+  # Artifact patterns
+  patterns:
+    build-artifacts:
+      - "target/**/*.jar"
+      - "target/**/*.bala"
+      - "target/bin/**/*"
+    test-results:
+      - "target/test_results.json"
+      - "target/coverage/**/*.xml"
+    security-reports:
+      - "trivy-results.json"
+      - "trivy-results.sarif"
+      - "dependency-check-report.html"
+
+# Cache configuration
+cache:
+  # Cache key patterns
+  keys:
+    ballerina-deps: "${{ runner.os }}-ballerina-${{ hashFiles('**/Dependencies.toml') }}"
+    docker-layers: "${{ runner.os }}-docker-${{ github.sha }}"
+    
+  # Cache restore fallbacks
+  restore-keys:
+    ballerina-deps: "${{ runner.os }}-ballerina-"
+    docker-layers: "${{ runner.os }}-docker-"
+    
+  # Cache size limits (approximate)
+  max-size: "1GB"
+
+# Branch and PR configuration
+branches:
+  # Protected branches
+  protected:
+    - main
+    - develop
+    
+  # Branch patterns for workflow triggers
+  triggers:
+    ci: [main, develop, "feature/**", "bugfix/**"]
+    release: ["release/**", "hotfix/**"]
+    
+  # PR requirements
+  pr-requirements:
+    required-reviews: 1
+    dismiss-stale-reviews: true
+    require-code-owner-reviews: true
+    required-status-checks:
+      - lint
+      - build-test
+      - security-scan
+
+# Notification configuration
+notifications:
+  # Slack configuration (if webhook provided)
+  slack:
+    enabled: false
+    webhook-secret: SLACK_WEBHOOK_URL
+    channels:
+      success: "#deployments"
+      failure: "#alerts"
+      
+  # Teams configuration (if webhook provided)
+  teams:
+    enabled: false
+    webhook-secret: TEAMS_WEBHOOK_URL
+    
+  # Email configuration
+  email:
+    enabled: true
+    on-failure: true
+    on-success: false
+
+# Deployment configuration
+deployment:
+  # Environment configuration
+  environments:
+    staging:
+      url: https://staging.mcp-ballerina.example.com
+      required-reviewers: []
+      
+    production:
+      url: https://mcp-ballerina.example.com
+      required-reviewers: ["team-lead", "devops"]
+      
+  # Deployment strategies
+  strategies:
+    staging: rolling
+    production: blue-green
+
+# Quality gates
+quality:
+  # Code coverage requirements
+  coverage:
+    minimum: 80
+    trend: maintain
+    
+  # Security requirements
+  security:
+    max-critical: 0
+    max-high: 2
+    max-medium: 10
+    
+  # Performance requirements
+  performance:
+    max-build-time: 600  # 10 minutes
+    max-test-time: 900   # 15 minutes
+    
+  # Documentation requirements
+  documentation:
+    api-coverage: 70
+    readme-updated: true
+
+# Experimental features
+experimental:
+  # GitHub Actions features
+  reusable-workflows: true
+  composite-actions: true
+  
+  # Security features
+  oidc-auth: false
+  cosign-signing: true
+  
+  # Performance features
+  build-caching: true
+  parallel-builds: true

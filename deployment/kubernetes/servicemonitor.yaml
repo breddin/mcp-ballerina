@@ -1,0 +1,231 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: servicemonitor
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/managed-by: gitops
+    prometheus: kube-prometheus
+  annotations:
+    description: "ServiceMonitor for MCP Ballerina Server metrics"
+    gitops.argoproj.io/sync-wave: "4"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-ballerina
+      app.kubernetes.io/component: metrics
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: false
+    scheme: http
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: 'mcp_ballerina_.*'
+      targetLabel: service
+      replacement: 'mcp-ballerina'
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod_name
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node_name
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: kubernetes_namespace
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_service_name]
+      targetLabel: service_name
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_pod_container_name]
+      targetLabel: container
+  namespaceSelector:
+    matchNames:
+    - mcp-ballerina
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: podmonitor
+    app.kubernetes.io/part-of: mcp-ballerina
+    prometheus: kube-prometheus
+  annotations:
+    description: "PodMonitor for MCP Ballerina Server pod metrics"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-ballerina
+      app.kubernetes.io/component: server
+  podMetricsEndpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: false
+    scheme: http
+  - port: nginx-http
+    path: /nginx_status
+    interval: 30s
+    scrapeTimeout: 5s
+    honorLabels: false
+    scheme: http
+  namespaceSelector:
+    matchNames:
+    - mcp-ballerina
+---
+# PrometheusRule for alerting
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: prometheus-rule
+    app.kubernetes.io/part-of: mcp-ballerina
+    prometheus: kube-prometheus
+  annotations:
+    description: "Prometheus alerting rules for MCP Ballerina Server"
+spec:
+  groups:
+  - name: mcp-ballerina.rules
+    interval: 30s
+    rules:
+    # Recording rules
+    - record: mcp_ballerina:request_rate_5m
+      expr: rate(mcp_ballerina_http_requests_total[5m])
+      labels:
+        service: mcp-ballerina
+    
+    - record: mcp_ballerina:error_rate_5m
+      expr: rate(mcp_ballerina_http_requests_total{status=~"5.."}[5m]) / rate(mcp_ballerina_http_requests_total[5m])
+      labels:
+        service: mcp-ballerina
+    
+    - record: mcp_ballerina:response_time_95th_5m
+      expr: histogram_quantile(0.95, rate(mcp_ballerina_http_request_duration_seconds_bucket[5m]))
+      labels:
+        service: mcp-ballerina
+    
+    - record: mcp_ballerina:response_time_99th_5m
+      expr: histogram_quantile(0.99, rate(mcp_ballerina_http_request_duration_seconds_bucket[5m]))
+      labels:
+        service: mcp-ballerina
+    
+    # CPU and Memory utilization
+    - record: mcp_ballerina:cpu_utilization
+      expr: rate(container_cpu_usage_seconds_total{pod=~"mcp-ballerina-.*", container="mcp-ballerina"}[5m])
+      labels:
+        service: mcp-ballerina
+    
+    - record: mcp_ballerina:memory_utilization
+      expr: container_memory_working_set_bytes{pod=~"mcp-ballerina-.*", container="mcp-ballerina"} / container_spec_memory_limit_bytes{pod=~"mcp-ballerina-.*", container="mcp-ballerina"}
+      labels:
+        service: mcp-ballerina
+    
+    # Alerting rules
+    - alert: MCPBallerinaHighErrorRate
+      expr: mcp_ballerina:error_rate_5m > 0.1
+      for: 5m
+      labels:
+        severity: critical
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina has high error rate"
+        description: "MCP Ballerina error rate is {{ $value | humanizePercentage }} for more than 5 minutes"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/high-error-rate"
+    
+    - alert: MCPBallerinaHighResponseTime
+      expr: mcp_ballerina:response_time_95th_5m > 1
+      for: 5m
+      labels:
+        severity: warning
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina has high response time"
+        description: "MCP Ballerina 95th percentile response time is {{ $value }}s for more than 5 minutes"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/high-response-time"
+    
+    - alert: MCPBallerinaHighCPUUsage
+      expr: mcp_ballerina:cpu_utilization > 0.8
+      for: 10m
+      labels:
+        severity: warning
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina has high CPU usage"
+        description: "MCP Ballerina CPU usage is {{ $value | humanizePercentage }} for more than 10 minutes"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/high-cpu"
+    
+    - alert: MCPBallerinaHighMemoryUsage
+      expr: mcp_ballerina:memory_utilization > 0.9
+      for: 10m
+      labels:
+        severity: critical
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina has high memory usage"
+        description: "MCP Ballerina memory usage is {{ $value | humanizePercentage }} for more than 10 minutes"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/high-memory"
+    
+    - alert: MCPBallerinaPodNotReady
+      expr: kube_pod_status_ready{pod=~"mcp-ballerina-.*", condition="false"} == 1
+      for: 5m
+      labels:
+        severity: warning
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina pod is not ready"
+        description: "Pod {{ $labels.pod }} has been not ready for more than 5 minutes"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/pod-not-ready"
+    
+    - alert: MCPBallerinaPodCrashLooping
+      expr: rate(kube_pod_container_status_restarts_total{pod=~"mcp-ballerina-.*", container="mcp-ballerina"}[15m]) > 0
+      for: 5m
+      labels:
+        severity: critical
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina pod is crash looping"
+        description: "Pod {{ $labels.pod }} is restarting frequently"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/crash-looping"
+    
+    - alert: MCPBallerinaLowRequestRate
+      expr: mcp_ballerina:request_rate_5m < 1
+      for: 15m
+      labels:
+        severity: warning
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina has low request rate"
+        description: "MCP Ballerina request rate is {{ $value }} requests/second for more than 15 minutes"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/low-traffic"
+    
+    - alert: MCPBallerinaServiceDown
+      expr: up{job="mcp-ballerina-metrics"} == 0
+      for: 1m
+      labels:
+        severity: critical
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina service is down"
+        description: "MCP Ballerina metrics endpoint is not responding"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/service-down"
+    
+    - alert: MCPBallerinaDeploymentReplicasMismatch
+      expr: kube_deployment_spec_replicas{deployment="mcp-ballerina"} != kube_deployment_status_ready_replicas{deployment="mcp-ballerina"}
+      for: 10m
+      labels:
+        severity: warning
+        service: mcp-ballerina
+      annotations:
+        summary: "MCP Ballerina deployment has replica mismatch"
+        description: "Deployment {{ $labels.deployment }} has {{ $value }} replicas ready, but expects {{ $labels.spec_replicas }}"
+        runbook_url: "https://runbooks.company.com/mcp-ballerina/replica-mismatch"

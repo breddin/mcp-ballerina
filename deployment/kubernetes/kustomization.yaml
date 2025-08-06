@@ -1,0 +1,117 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: mcp-ballerina
+  annotations:
+    description: "Kustomization for MCP Ballerina Server deployment"
+
+# Namespace for all resources
+namespace: mcp-ballerina
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: mcp-ballerina
+  app.kubernetes.io/part-of: mcp-ballerina
+  app.kubernetes.io/managed-by: kustomize
+
+# Common annotations
+commonAnnotations:
+  deployment.kubernetes.io/managed-by: kustomize
+  gitops.source: https://github.com/example/mcp-ballerina
+
+# Resources to include
+resources:
+- namespace.yaml
+- rbac.yaml
+- configmap.yaml
+- secret.yaml
+- pvc.yaml
+- deployment.yaml
+- service.yaml
+- ingress.yaml
+- hpa.yaml
+- servicemonitor.yaml
+
+# ConfigMap generator for additional configs
+configMapGenerator:
+- name: mcp-ballerina-environment-config
+  literals:
+  - ENVIRONMENT=production
+  - LOG_LEVEL=INFO
+  - DEBUG=false
+
+# Secret generator for sensitive data
+secretGenerator:
+- name: mcp-ballerina-runtime-secrets
+  literals:
+  - RUNTIME_SECRET=change-me-production
+  type: Opaque
+
+# Images to be used (for image management)
+images:
+- name: mcp-ballerina
+  newName: docker.io/company/mcp-ballerina
+  newTag: "1.0.0"
+- name: nginx
+  newName: nginx
+  newTag: "1.25-alpine"
+
+# Patches for environment-specific customizations
+patches:
+- target:
+    kind: Deployment
+    name: mcp-ballerina
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 3
+    - op: add
+      path: /spec/template/spec/containers/0/env/-
+      value:
+        name: ENVIRONMENT
+        value: production
+
+# Replicas configuration
+replicas:
+- name: mcp-ballerina
+  count: 3
+
+# Name prefix/suffix
+namePrefix: ""
+nameSuffix: ""
+
+# Label transformers
+labelTransformers:
+- target:
+    kind: "*"
+  labels:
+    version: "1.0.0"
+    tier: application
+    component: mcp-server
+
+# Annotation transformers
+annotationTransformers:
+- target:
+    kind: "*"
+  annotations:
+    deployment.timestamp: "2024-01-01T00:00:00Z"
+
+# Resource transformers
+transformers:
+- |-
+  apiVersion: builtin
+  kind: LabelTransformer
+  metadata:
+    name: labels
+  labels:
+    environment: production
+  fieldSpecs:
+  - path: metadata/labels
+    create: true
+  - path: spec/selector/matchLabels
+    create: true
+    kind: Deployment
+  - path: spec/template/metadata/labels
+    create: true
+    kind: Deployment

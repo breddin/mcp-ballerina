@@ -1,0 +1,390 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-ballerina
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: server
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: gitops
+  annotations:
+    description: "MCP Ballerina Server Deployment"
+    deployment.kubernetes.io/revision: "1"
+    gitops.argoproj.io/sync-wave: "0"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-ballerina
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mcp-ballerina
+        app.kubernetes.io/component: server
+        app.kubernetes.io/part-of: mcp-ballerina
+        app.kubernetes.io/version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        co.elastic.logs/enabled: "true"
+        co.elastic.logs/json.keys_under_root: "true"
+        co.elastic.logs/json.add_error_key: "true"
+        config.linkerd.io/proxy-cpu-request: "100m"
+        config.linkerd.io/proxy-memory-request: "128Mi"
+        config.linkerd.io/proxy-cpu-limit: "200m"
+        config.linkerd.io/proxy-memory-limit: "256Mi"
+    spec:
+      serviceAccountName: mcp-ballerina
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - mcp-ballerina
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+          - weight: 30
+            preference:
+              matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: In
+                values:
+                - c5.large
+                - c5.xlarge
+                - c5.2xlarge
+      tolerations:
+      - key: "app.kubernetes.io/name"
+        operator: "Equal"
+        value: "mcp-ballerina"
+        effect: "NoSchedule"
+      initContainers:
+      - name: init-permissions
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - CHOWN
+            - FOWNER
+        command:
+        - sh
+        - -c
+        - |
+          echo "Setting up directories and permissions..."
+          mkdir -p /app-data/{data,logs,temp}
+          chown -R 1000:1000 /app-data
+          chmod -R 755 /app-data
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app-data/data
+        - name: logs-volume
+          mountPath: /app-data/logs
+        - name: temp-volume
+          mountPath: /app-data/temp
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 32Mi
+      containers:
+      - name: mcp-ballerina
+        image: mcp-ballerina:1.0.0
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: SERVICE_ACCOUNT
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.serviceAccountName
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: JAVA_OPTS
+          value: "-Xmx1536m -Xms512m -XX:+UseG1GC -XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+        - name: BALLERINA_HOME
+          value: "/opt/ballerina"
+        - name: SERVER_PORT
+          value: "8080"
+        - name: METRICS_PORT
+          value: "9090"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: ENVIRONMENT
+          value: "production"
+        # Secret environment variables
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: mcp-ballerina-secrets
+              key: database-url
+        - name: DATABASE_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mcp-ballerina-secrets
+              key: database-username
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mcp-ballerina-secrets
+              key: database-password
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: mcp-ballerina-secrets
+              key: redis-url
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mcp-ballerina-secrets
+              key: api-key
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: mcp-ballerina-secrets
+              key: jwt-secret
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: http
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 6
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - sh
+              - -c
+              - |
+                echo "Graceful shutdown initiated..."
+                sleep 5
+                curl -X POST http://localhost:8080/admin/shutdown
+                sleep 10
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+            ephemeral-storage: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+            ephemeral-storage: 5Gi
+        volumeMounts:
+        - name: config-volume
+          mountPath: /config
+          readOnly: true
+        - name: scripts-volume
+          mountPath: /scripts
+          readOnly: true
+        - name: data-volume
+          mountPath: /app/data
+        - name: logs-volume
+          mountPath: /app/logs
+        - name: temp-volume
+          mountPath: /app/temp
+        - name: tmp-volume
+          mountPath: /tmp
+        - name: var-tmp-volume
+          mountPath: /var/tmp
+        - name: run-volume
+          mountPath: /run
+      # Nginx sidecar for load balancing and SSL termination
+      - name: nginx
+        image: nginx:1.25-alpine
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 101
+          runAsGroup: 101
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        ports:
+        - name: nginx-http
+          containerPort: 80
+          protocol: TCP
+        env:
+        - name: NGINX_WORKER_PROCESSES
+          value: "auto"
+        - name: NGINX_WORKER_CONNECTIONS
+          value: "1024"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: nginx-http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: nginx-http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+      volumes:
+      - name: config-volume
+        configMap:
+          name: mcp-ballerina-config
+          defaultMode: 0444
+      - name: scripts-volume
+        configMap:
+          name: mcp-ballerina-scripts
+          defaultMode: 0555
+      - name: nginx-config
+        configMap:
+          name: mcp-ballerina-config
+          items:
+          - key: nginx.conf
+            path: nginx.conf
+          defaultMode: 0444
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: mcp-ballerina-data
+      - name: logs-volume
+        persistentVolumeClaim:
+          claimName: mcp-ballerina-logs
+      - name: temp-volume
+        persistentVolumeClaim:
+          claimName: mcp-ballerina-temp
+      # Ephemeral volumes
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: var-tmp-volume
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: run-volume
+        emptyDir:
+          medium: Memory
+          sizeLimit: 100Mi
+      - name: nginx-cache
+        emptyDir:
+          sizeLimit: 100Mi
+      - name: nginx-run
+        emptyDir:
+          medium: Memory
+          sizeLimit: 50Mi

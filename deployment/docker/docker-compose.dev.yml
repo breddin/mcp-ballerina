@@ -1,0 +1,224 @@
+version: '3.8'
+
+services:
+  # MCP Ballerina Server - Development Mode
+  mcp-ballerina-dev:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.dev
+    image: mcp-ballerina:dev
+    container_name: mcp-ballerina-dev
+    restart: "no"
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+      - "9090:9090"  # Metrics
+      - "5005:5005"  # Debug port
+    environment:
+      - MCP_SERVER_PORT=8080
+      - MCP_METRICS_PORT=9090
+      - LOG_LEVEL=DEBUG
+      - JVM_HEAP_SIZE=512m
+      - PROMETHEUS_ENABLED=true
+      - BALLERINA_DEBUG=true
+      - HOT_RELOAD=true
+    volumes:
+      - ../../:/app:cached
+      - dev-cache:/app/target
+      - dev-logs:/app/logs
+      - ~/.ballerina:/home/ballerina/.ballerina
+    networks:
+      - mcp-dev-network
+    stdin_open: true
+    tty: true
+    command: >
+      sh -c "
+        echo 'Starting development server with hot reload...' &&
+        bal run --debug=5005 --observability-included mcp_ballerina_server_enhanced.bal
+      "
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Development Database - PostgreSQL
+  postgres-dev:
+    image: postgres:16.1-alpine
+    container_name: mcp-postgres-dev
+    restart: "no"
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=mcp_ballerina_dev
+      - POSTGRES_USER=dev_user
+      - POSTGRES_PASSWORD=dev_pass123
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+      - ./dev/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - mcp-dev-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev_user -d mcp_ballerina_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Development Redis
+  redis-dev:
+    image: redis:7.2.4-alpine
+    container_name: mcp-redis-dev
+    restart: "no"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-dev-data:/data
+    networks:
+      - mcp-dev-network
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Prometheus for development metrics
+  prometheus-dev:
+    image: prom/prometheus:v2.48.1
+    container_name: mcp-prometheus-dev
+    restart: "no"
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus-dev.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-dev-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - mcp-dev-network
+    depends_on:
+      - mcp-ballerina-dev
+
+  # Grafana for development
+  grafana-dev:
+    image: grafana/grafana:10.2.3
+    container_name: mcp-grafana-dev
+    restart: "no"
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Editor
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-dev-data:/var/lib/grafana
+      - ./monitoring/grafana/dev-dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dev-datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - mcp-dev-network
+    depends_on:
+      - prometheus-dev
+
+  # Development Tools Container
+  dev-tools:
+    image: node:20-alpine
+    container_name: mcp-dev-tools
+    restart: "no"
+    volumes:
+      - ../../:/workspace:cached
+      - dev-node-modules:/workspace/node_modules
+    working_dir: /workspace
+    networks:
+      - mcp-dev-network
+    command: >
+      sh -c "
+        npm install -g nodemon typescript ts-node &&
+        npm install &&
+        tail -f /dev/null
+      "
+    stdin_open: true
+    tty: true
+
+  # Test Runner Container
+  test-runner:
+    image: ballerina/ballerina:2201.12.7
+    container_name: mcp-test-runner
+    restart: "no"
+    volumes:
+      - ../../:/app:cached
+      - test-cache:/app/target
+    working_dir: /app
+    networks:
+      - mcp-dev-network
+    command: >
+      sh -c "
+        echo 'Test runner ready. Use: docker exec -it mcp-test-runner bal test' &&
+        tail -f /dev/null
+      "
+    stdin_open: true
+    tty: true
+
+  # API Documentation Server
+  swagger-ui:
+    image: swaggerapi/swagger-ui:v5.9.0
+    container_name: mcp-swagger-dev
+    restart: "no"
+    ports:
+      - "8081:8080"
+    environment:
+      - SWAGGER_JSON=/docs/openapi.yaml
+      - BASE_URL=/docs
+    volumes:
+      - ../../docs:/docs:ro
+    networks:
+      - mcp-dev-network
+
+  # Hot Reload File Watcher
+  file-watcher:
+    image: node:20-alpine
+    container_name: mcp-file-watcher
+    restart: "no"
+    volumes:
+      - ../../:/workspace:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /workspace
+    networks:
+      - mcp-dev-network
+    command: >
+      sh -c "
+        npm install -g chokidar-cli &&
+        chokidar '**/*.bal' --ignore 'target/**' --ignore 'node_modules/**' -c 'echo File changed: {path} - Triggering reload...'
+      "
+
+volumes:
+  dev-cache:
+    driver: local
+  dev-logs:
+    driver: local
+  dev-node-modules:
+    driver: local
+  test-cache:
+    driver: local
+  postgres-dev-data:
+    driver: local
+  redis-dev-data:
+    driver: local
+  prometheus-dev-data:
+    driver: local
+  grafana-dev-data:
+    driver: local
+
+networks:
+  mcp-dev-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

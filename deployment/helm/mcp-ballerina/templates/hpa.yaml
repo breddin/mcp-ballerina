@@ -1,0 +1,88 @@
+{{- if .Values.autoscaling.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hpa
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "Horizontal Pod Autoscaler for MCP Ballerina Server"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "mcp-ballerina.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.hpa.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.hpa.maxReplicas }}
+  {{- with .Values.autoscaling.hpa.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  metrics:
+  {{- if .Values.autoscaling.hpa.targetCPUUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.hpa.targetCPUUtilizationPercentage }}
+  {{- end }}
+  {{- if .Values.autoscaling.hpa.targetMemoryUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.hpa.targetMemoryUtilizationPercentage }}
+  {{- end }}
+  {{- with .Values.autoscaling.hpa.customMetrics }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.autoscaling.vpa.enabled }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: vpa
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "Vertical Pod Autoscaler for MCP Ballerina Server"
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "mcp-ballerina.fullname" . }}
+  updatePolicy:
+    updateMode: {{ .Values.autoscaling.vpa.updateMode | quote }}
+    {{- if .Values.autoscaling.vpa.minReplicas }}
+    minReplicas: {{ .Values.autoscaling.vpa.minReplicas }}
+    {{- end }}
+  resourcePolicy:
+    containerPolicies:
+    - containerName: {{ .Chart.Name }}
+      minAllowed:
+        cpu: {{ .Values.deployment.resources.requests.cpu }}
+        memory: {{ .Values.deployment.resources.requests.memory }}
+      maxAllowed:
+        cpu: {{ .Values.deployment.resources.limits.cpu }}
+        memory: {{ .Values.deployment.resources.limits.memory }}
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+    {{- if .Values.nginx.enabled }}
+    - containerName: nginx
+      minAllowed:
+        cpu: {{ .Values.nginx.resources.requests.cpu }}
+        memory: {{ .Values.nginx.resources.requests.memory }}
+      maxAllowed:
+        cpu: {{ .Values.nginx.resources.limits.cpu }}
+        memory: {{ .Values.nginx.resources.limits.memory }}
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+    {{- end }}
+{{- end }}

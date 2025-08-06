@@ -1,0 +1,140 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: service
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    {{- include "mcp-ballerina.prometheusAnnotations" . | nindent 4 }}
+    description: "Main service for MCP Ballerina Server"
+    {{- with .Values.service.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "mcp-ballerina.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: http
+    port: {{ .Values.service.port }}
+    targetPort: {{ .Values.service.targetPort }}
+    protocol: TCP
+    appProtocol: http
+  - name: https
+    port: {{ .Values.service.httpsPort }}
+    targetPort: https
+    protocol: TCP
+    appProtocol: https
+  - name: mcp-direct
+    port: 8080
+    targetPort: http
+    protocol: TCP
+    appProtocol: http
+  {{- with .Values.service.sessionAffinity }}
+  sessionAffinity: {{ . }}
+  {{- end }}
+  {{- with .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}-metrics
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "Metrics service for MCP Ballerina Server"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: {{ .Values.service.metricsPort | quote }}
+    prometheus.io/path: {{ .Values.monitoring.serviceMonitor.path | quote }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "mcp-ballerina.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: metrics
+    port: {{ .Values.service.metricsPort }}
+    targetPort: metrics
+    protocol: TCP
+    appProtocol: http
+  clusterIP: None
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}-headless
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: headless
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "Headless service for MCP Ballerina Server discovery"
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "mcp-ballerina.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 8443
+    targetPort: https
+    protocol: TCP
+  - name: metrics
+    port: {{ .Values.service.metricsPort }}
+    targetPort: metrics
+    protocol: TCP
+{{- if .Values.service.external.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}-external
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: external
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "External LoadBalancer for MCP Ballerina Server"
+    {{- with .Values.service.external.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.external.type }}
+  selector:
+    {{- include "mcp-ballerina.selectorLabels" . | nindent 4 }}
+  ports:
+  - name: http
+    port: 80
+    targetPort: {{ .Values.service.targetPort }}
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP
+  {{- with .Values.service.external.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 2 }}
+  {{- end }}
+  externalTrafficPolicy: Local
+  {{- with .Values.service.sessionAffinity }}
+  sessionAffinity: {{ . }}
+  {{- end }}
+  {{- with .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

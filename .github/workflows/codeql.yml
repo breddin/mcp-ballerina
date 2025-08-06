@@ -1,0 +1,111 @@
+name: "CodeQL Security Analysis"
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run CodeQL analysis every day at 6 AM UTC
+    - cron: '0 6 * * *'
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze Code
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        # CodeQL supports multiple languages
+        language: ['java']  # Ballerina compiles to Java bytecode
+        
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Ballerina
+        uses: ballerina-platform/setup-ballerina@v1.1.0
+        with:
+          version: latest
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: ${{ matrix.language }}
+          # Override default queries with security-focused ones
+          queries: +security-extended,security-and-quality
+
+      - name: Cache Ballerina dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ballerina/repositories
+            ~/.ballerina/caches
+          key: ${{ runner.os }}-ballerina-codeql-${{ hashFiles('**/Dependencies.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-ballerina-codeql-
+            ${{ runner.os }}-ballerina-
+
+      - name: Build Ballerina project
+        run: |
+          cd ballerina-mcp-server
+          bal pull
+          bal build
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:${{matrix.language}}"
+          upload: true
+
+      - name: Generate security summary
+        run: |
+          echo "# CodeQL Security Analysis Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ CodeQL analysis completed for ${{ matrix.language }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Analysis details available in the Security tab of the repository." >> $GITHUB_STEP_SUMMARY
+
+  upload-results:
+    name: Upload Results
+    runs-on: ubuntu-latest
+    needs: analyze
+    if: always()
+    
+    steps:
+      - name: Download CodeQL results
+        if: github.event_name == 'schedule'
+        run: |
+          echo "CodeQL analysis completed on schedule"
+          echo "Results uploaded to GitHub Security tab"
+
+      - name: Notify on high severity findings
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🔒 High severity security issues detected by CodeQL',
+              body: `CodeQL analysis has detected high severity security issues in the codebase.
+              
+              Please review the findings in the Security tab and address them promptly.
+              
+              Analysis run: ${context.runId}
+              Date: ${new Date().toISOString()}
+              
+              **Action Required:**
+              1. Go to Security > Code scanning alerts
+              2. Review and triage the findings
+              3. Create fixes for confirmed issues
+              4. Re-run the analysis to verify fixes
+              `,
+              labels: ['security', 'high-priority', 'codeql']
+            })

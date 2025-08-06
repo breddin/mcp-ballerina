@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-ballerina-data
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/managed-by: gitops
+  annotations:
+    description: "Persistent storage for MCP Ballerina Server data"
+    volume.beta.kubernetes.io/storage-class: "fast-ssd"
+    gitops.argoproj.io/sync-wave: "-1"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast-ssd
+  resources:
+    requests:
+      storage: 50Gi
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mcp-ballerina
+      app.kubernetes.io/component: data-volume
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-ballerina-logs
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: logs
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Persistent storage for MCP Ballerina Server logs"
+    volume.beta.kubernetes.io/storage-class: "standard"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mcp-ballerina-temp
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: temp
+    app.kubernetes.io/part-of: mcp-ballerina
+  annotations:
+    description: "Temporary storage for MCP Ballerina Server"
+    volume.beta.kubernetes.io/storage-class: "fast"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: fast
+  resources:
+    requests:
+      storage: 10Gi
+---
+# Storage Class definitions (if needed)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: storage-class
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    description: "Fast SSD storage for high-performance workloads"
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  fsType: ext4
+  encrypted: "true"
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: storage-class
+  annotations:
+    description: "Standard storage for general purpose use"
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp2
+  fsType: ext4
+  encrypted: "true"
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: storage-class
+  annotations:
+    description: "Fast storage with good IOPS"
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: io1
+  iopsPerGB: "50"
+  fsType: ext4
+  encrypted: "true"
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete

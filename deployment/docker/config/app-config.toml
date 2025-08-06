@@ -1,0 +1,43 @@
+[server]
+port = 8080
+host = "0.0.0.0"
+max_connections = 1000
+request_timeout = 30000
+
+[security]
+enable_cors = true
+cors_origins = ["*"]
+enable_rate_limiting = true
+rate_limit_requests_per_minute = 1000
+
+[metrics]
+enabled = true
+port = 9090
+path = "/metrics"
+
+[logging]
+level = "INFO"
+format = "json"
+output = "console"
+
+[database]
+type = "postgresql"
+host = "postgres-dev"
+port = 5432
+database = "mcp_ballerina_dev"
+username = "dev_user"
+password = "dev_pass123"
+max_connections = 20
+
+[cache]
+type = "redis"
+host = "redis-dev"
+port = 6379
+ttl = 3600
+
+[features]
+language_server_integration = true
+code_analysis = true
+refactoring_tools = true
+collaboration = false
+security_scanning = true

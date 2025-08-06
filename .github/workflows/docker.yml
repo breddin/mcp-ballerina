@@ -1,0 +1,371 @@
+name: Docker Build and Push
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 'Push image to registry'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+        
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-metadata: ${{ steps.meta.outputs.json }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+        with:
+          platforms: all
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          buildkitd-flags: --debug
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request' && secrets.DOCKERHUB_USERNAME
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+            ${{ secrets.DOCKERHUB_USERNAME && format('{0}/mcp-ballerina-server', secrets.DOCKERHUB_USERNAME) || '' }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=MCP Ballerina Server
+            org.opencontainers.image.description=Model Context Protocol server implementation in Ballerina
+            org.opencontainers.image.vendor=MCP Ballerina Project
+
+      - name: Create optimized Dockerfile
+        run: |
+          cat > ballerina-mcp-server/Dockerfile.optimized << 'EOF'
+          # Multi-stage build for optimal image size
+          FROM ballerina/ballerina:2201.8.0 as builder
+          
+          WORKDIR /app
+          
+          # Copy dependency files first for better caching
+          COPY Ballerina.toml Dependencies.toml ./
+          
+          # Pull dependencies
+          RUN bal pull
+          
+          # Copy source code
+          COPY . .
+          
+          # Build the project
+          RUN bal build --offline
+          
+          # Production stage
+          FROM ballerina/ballerina:2201.8.0-runtime
+          
+          # Install security updates
+          USER root
+          RUN apt-get update && apt-get upgrade -y && \
+              apt-get clean && rm -rf /var/lib/apt/lists/*
+          
+          # Create non-root user
+          RUN groupadd -r mcpuser && useradd -r -g mcpuser mcpuser
+          
+          WORKDIR /app
+          
+          # Copy built artifacts from builder stage
+          COPY --from=builder --chown=mcpuser:mcpuser /app/target/bin/*.jar ./
+          COPY --from=builder --chown=mcpuser:mcpuser /app/target/cache ./cache/
+          
+          # Set environment variables
+          ENV BAL_JAVA_DEBUG=false
+          ENV BALLERINA_HOME=/usr/lib/ballerina
+          
+          # Health check
+          HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+              CMD curl -f http://localhost:8080/health || exit 1
+          
+          # Switch to non-root user
+          USER mcpuser
+          
+          # Expose port
+          EXPOSE 8080
+          
+          # Run the application
+          CMD ["bal", "run", "mcp-server.jar"]
+          EOF
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v4
+        with:
+          context: ./ballerina-mcp-server
+          file: ./ballerina-mcp-server/Dockerfile.optimized
+          platforms: ${{ matrix.platform }}
+          push: ${{ github.event_name != 'pull_request' || github.event.inputs.push_image == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          build-args: |
+            BUILDTIME=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            VERSION=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.version'] }}
+            REVISION=${{ github.sha }}
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build-docker
+    if: github.event_name != 'pull_request'
+    
+    permissions:
+      security-events: write
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run Grype vulnerability scanner
+        uses: anchore/scan-action@v3
+        id: grype
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          fail-build: false
+          severity-cutoff: high
+
+      - name: Upload Grype results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+
+  image-signing:
+    name: Sign Container Image
+    runs-on: ubuntu-latest
+    needs: [build-docker, security-scan]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign container image
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          images=""
+          for tag in ${{ needs.build-docker.outputs.image-metadata && fromJSON(needs.build-docker.outputs.image-metadata).tags || '' }}; do
+            images+="${tag}@${{ needs.build-docker.outputs.image-digest }} "
+          done
+          cosign sign --yes ${images}
+
+  deployment-test:
+    name: Test Deployment
+    runs-on: ubuntu-latest
+    needs: build-docker
+    
+    services:
+      registry:
+        image: registry:2
+        ports:
+          - 5000:5000
+          
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        with:
+          driver-opts: network=host
+
+      - name: Build test image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./ballerina-mcp-server
+          push: true
+          tags: localhost:5000/mcp-ballerina-server:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test container startup
+        run: |
+          docker run --rm -d --name mcp-test \
+            -p 8080:8080 \
+            localhost:5000/mcp-ballerina-server:test
+          
+          # Wait for container to start
+          sleep 10
+          
+          # Check if container is running
+          if docker ps | grep -q mcp-test; then
+            echo "✅ Container started successfully"
+          else
+            echo "❌ Container failed to start"
+            docker logs mcp-test
+            exit 1
+          fi
+          
+          # Test health endpoint (if available)
+          if curl -f http://localhost:8080/health > /dev/null 2>&1; then
+            echo "✅ Health check passed"
+          else
+            echo "⚠️  Health check endpoint not available or failing"
+          fi
+          
+          # Stop container
+          docker stop mcp-test
+
+      - name: Test with docker-compose
+        run: |
+          cat > docker-compose.test.yml << EOF
+          version: '3.8'
+          services:
+            mcp-server:
+              image: localhost:5000/mcp-ballerina-server:test
+              ports:
+                - "8080:8080"
+              environment:
+                - NODE_ENV=test
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+                interval: 10s
+                timeout: 5s
+                retries: 3
+          EOF
+          
+          docker-compose -f docker-compose.test.yml up -d
+          sleep 15
+          
+          # Check service status
+          if docker-compose -f docker-compose.test.yml ps | grep -q "Up"; then
+            echo "✅ Docker Compose deployment successful"
+          else
+            echo "❌ Docker Compose deployment failed"
+            docker-compose -f docker-compose.test.yml logs
+            exit 1
+          fi
+          
+          docker-compose -f docker-compose.test.yml down
+
+  multi-arch-manifest:
+    name: Create Multi-Architecture Manifest
+    runs-on: ubuntu-latest
+    needs: [build-docker, security-scan]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    
+    steps:
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifest
+        run: |
+          # Create manifest list for multi-architecture support
+          docker buildx imagetools create \
+            --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-linux-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-linux-arm64
+
+  notify:
+    name: Notify Build Status
+    runs-on: ubuntu-latest
+    needs: [build-docker, security-scan, deployment-test]
+    if: always()
+    
+    steps:
+      - name: Notify success
+        if: |
+          needs.build-docker.result == 'success' && 
+          needs.security-scan.result == 'success' && 
+          needs.deployment-test.result == 'success'
+        run: |
+          echo "🐳 Docker build pipeline completed successfully!"
+          echo "✅ Image built and pushed"
+          echo "✅ Security scan passed"
+          echo "✅ Deployment test passed"
+
+      - name: Notify failure
+        if: |
+          needs.build-docker.result == 'failure' || 
+          needs.security-scan.result == 'failure' || 
+          needs.deployment-test.result == 'failure'
+        run: |
+          echo "❌ Docker build pipeline failed!"
+          echo "Build: ${{ needs.build-docker.result }}"
+          echo "Security: ${{ needs.security-scan.result }}"
+          echo "Deployment Test: ${{ needs.deployment-test.result }}"
+          exit 1

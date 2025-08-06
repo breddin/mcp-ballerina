@@ -1,0 +1,16 @@
+{{- if .Values.namespaceOverride }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespaceOverride }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: namespace
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "MCP Ballerina Server Namespace"
+    helm.sh/resource-policy: keep
+spec:
+  finalizers:
+    - kubernetes
+{{- end }}

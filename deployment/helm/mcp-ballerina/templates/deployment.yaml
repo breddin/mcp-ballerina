@@ -1,0 +1,194 @@
+{{- include "mcp-ballerina.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mcp-ballerina.fullname" . }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "MCP Ballerina Server Deployment"
+    deployment.kubernetes.io/revision: "1"
+spec:
+  replicas: {{ .Values.deployment.replicaCount }}
+  strategy:
+    {{- toYaml .Values.deployment.strategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "mcp-ballerina.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-ballerina.selectorLabels" . | nindent 8 }}
+        {{- with .Values.deployment.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- include "mcp-ballerina.prometheusAnnotations" . | nindent 8 }}
+        {{- with .Values.deployment.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- include "mcp-ballerina.imagePullSecrets" . | nindent 6 }}
+      serviceAccountName: {{ include "mcp-ballerina.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        {{- include "mcp-ballerina.podSecurityContext" . | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+      {{- include "mcp-ballerina.affinity" . | nindent 6 }}
+      {{- include "mcp-ballerina.nodeSelector" . | nindent 6 }}
+      {{- include "mcp-ballerina.tolerations" . | nindent 6 }}
+      initContainers:
+      - name: init-permissions
+        image: busybox:1.35
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - CHOWN
+            - FOWNER
+        command:
+        - sh
+        - -c
+        - |
+          echo "Setting up directories and permissions..."
+          {{- if .Values.persistence.data.enabled }}
+          mkdir -p /app-data/data
+          chown -R 1000:1000 /app-data/data
+          chmod -R 755 /app-data/data
+          {{- end }}
+          {{- if .Values.persistence.logs.enabled }}
+          mkdir -p /app-data/logs
+          chown -R 1000:1000 /app-data/logs
+          chmod -R 755 /app-data/logs
+          {{- end }}
+          {{- if .Values.persistence.temp.enabled }}
+          mkdir -p /app-data/temp
+          chown -R 1000:1000 /app-data/temp
+          chmod -R 755 /app-data/temp
+          {{- end }}
+        volumeMounts:
+        {{- if .Values.persistence.data.enabled }}
+        - name: data-volume
+          mountPath: /app-data/data
+        {{- end }}
+        {{- if .Values.persistence.logs.enabled }}
+        - name: logs-volume
+          mountPath: /app-data/logs
+        {{- end }}
+        {{- if .Values.persistence.temp.enabled }}
+        - name: temp-volume
+          mountPath: /app-data/temp
+        {{- end }}
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 50m
+            memory: 32Mi
+      containers:
+      - name: {{ .Chart.Name }}
+        image: {{ include "mcp-ballerina.image" . }}
+        imagePullPolicy: {{ include "mcp-ballerina.imagePullPolicy" . }}
+        securityContext:
+          {{- include "mcp-ballerina.securityContext" . | nindent 10 }}
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        {{- include "mcp-ballerina.env" . | nindent 8 }}
+        {{- include "mcp-ballerina.secretEnv" . | nindent 8 }}
+        livenessProbe:
+          {{- toYaml .Values.deployment.livenessProbe | nindent 10 }}
+        readinessProbe:
+          {{- toYaml .Values.deployment.readinessProbe | nindent 10 }}
+        startupProbe:
+          {{- toYaml .Values.deployment.startupProbe | nindent 10 }}
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - sh
+              - -c
+              - |
+                echo "Graceful shutdown initiated..."
+                sleep 5
+                curl -X POST http://localhost:8080/admin/shutdown
+                sleep 10
+        {{- include "mcp-ballerina.resources" . | nindent 8 }}
+        volumeMounts:
+        {{- include "mcp-ballerina.volumeMounts" . | nindent 8 }}
+      {{- if .Values.nginx.enabled }}
+      - name: nginx
+        image: {{ include "mcp-ballerina.nginxImage" . }}
+        imagePullPolicy: {{ .Values.nginx.image.pullPolicy }}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 101
+          runAsGroup: 101
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        ports:
+        - name: nginx-http
+          containerPort: 80
+          protocol: TCP
+        env:
+        - name: NGINX_WORKER_PROCESSES
+          value: "auto"
+        - name: NGINX_WORKER_CONNECTIONS
+          value: "1024"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: nginx-http
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: nginx-http
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        resources:
+          {{- toYaml .Values.nginx.resources | nindent 10 }}
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+          readOnly: true
+        - name: nginx-cache
+          mountPath: /var/cache/nginx
+        - name: nginx-run
+          mountPath: /var/run
+      {{- end }}
+      volumes:
+      {{- include "mcp-ballerina.volumes" . | nindent 6 }}

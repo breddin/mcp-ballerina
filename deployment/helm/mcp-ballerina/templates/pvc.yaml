@@ -1,0 +1,92 @@
+{{- if .Values.persistence.data.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-data" (include "mcp-ballerina.fullname" .) }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    storage-type: data
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "Persistent storage for MCP Ballerina Server data"
+    {{- with .Values.persistence.data.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.data.accessMode }}
+  {{- $storageClass := include "mcp-ballerina.storageClassName" .Values.persistence.data }}
+  {{- if $storageClass }}
+  storageClassName: {{ $storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.data.size }}
+  {{- if .Values.persistence.data.selector }}
+  selector:
+    {{- toYaml .Values.persistence.data.selector | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.persistence.logs.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-logs" (include "mcp-ballerina.fullname" .) }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    storage-type: logs
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "Persistent storage for MCP Ballerina Server logs"
+    {{- with .Values.persistence.logs.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.logs.accessMode }}
+  {{- $storageClass := include "mcp-ballerina.storageClassName" .Values.persistence.logs }}
+  {{- if $storageClass }}
+  storageClassName: {{ $storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.logs.size }}
+  {{- if .Values.persistence.logs.selector }}
+  selector:
+    {{- toYaml .Values.persistence.logs.selector | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.persistence.temp.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-temp" (include "mcp-ballerina.fullname" .) }}
+  labels:
+    {{- include "mcp-ballerina.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+    storage-type: temp
+  annotations:
+    {{- include "mcp-ballerina.annotations" . | nindent 4 }}
+    description: "Temporary storage for MCP Ballerina Server"
+    {{- with .Values.persistence.temp.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.temp.accessMode }}
+  {{- $storageClass := include "mcp-ballerina.storageClassName" .Values.persistence.temp }}
+  {{- if $storageClass }}
+  storageClassName: {{ $storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.temp.size }}
+  {{- if .Values.persistence.temp.selector }}
+  selector:
+    {{- toYaml .Values.persistence.temp.selector | nindent 4 }}
+  {{- end }}
+{{- end }}

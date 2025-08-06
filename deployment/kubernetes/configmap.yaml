@@ -1,0 +1,278 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-ballerina-config
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: mcp-ballerina
+    app.kubernetes.io/managed-by: gitops
+  annotations:
+    description: "Main configuration for MCP Ballerina Server"
+    gitops.argoproj.io/sync-wave: "-2"
+data:
+  # Server Configuration
+  server.toml: |
+    [server]
+    host = "0.0.0.0"
+    port = 8080
+    environment = "production"
+    
+    [server.ssl]
+    enabled = true
+    port = 8443
+    
+    [logging]
+    level = "INFO"
+    format = "json"
+    output = "stdout"
+    
+    [logging.audit]
+    enabled = true
+    level = "INFO"
+    
+    [metrics]
+    enabled = true
+    port = 9090
+    path = "/metrics"
+    
+    [health]
+    enabled = true
+    path = "/health"
+    
+    [mcp]
+    version = "1.0"
+    timeout = "30s"
+    max_connections = 1000
+    
+    [mcp.transport]
+    type = "stdio"
+    buffer_size = 8192
+    
+    [database]
+    type = "postgresql"
+    max_connections = 20
+    connection_timeout = "10s"
+    idle_timeout = "5m"
+    
+    [cache]
+    enabled = true
+    type = "redis"
+    ttl = "1h"
+    max_size = "100MB"
+
+  # Application Properties
+  application.properties: |
+    # Ballerina Runtime Configuration
+    ballerina.runtime.debug=false
+    ballerina.runtime.trace=false
+    ballerina.runtime.profile=production
+    
+    # JVM Settings
+    java.opts=-Xmx2g -Xms1g -XX:+UseG1GC -XX:+UseContainerSupport
+    
+    # Security
+    security.auth.enabled=true
+    security.tls.version=1.3
+    security.cors.enabled=true
+    security.cors.origins=*
+    
+    # Performance
+    performance.thread.pool.size=50
+    performance.connection.pool.size=20
+    performance.request.timeout=30000
+
+  # Log Configuration
+  log4j2.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <Configuration status="WARN">
+      <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+          <JsonLayout compact="true" eventEol="true">
+            <KeyValuePair key="timestamp" value="$${date:yyyy-MM-dd'T'HH:mm:ss.SSSZ}"/>
+            <KeyValuePair key="level" value="$${level}"/>
+            <KeyValuePair key="thread" value="$${thread}"/>
+            <KeyValuePair key="logger" value="$${logger}"/>
+            <KeyValuePair key="message" value="$${message}"/>
+            <KeyValuePair key="service" value="mcp-ballerina"/>
+            <KeyValuePair key="version" value="${sys:app.version:-unknown}"/>
+            <KeyValuePair key="pod" value="${sys:HOSTNAME:-unknown}"/>
+          </JsonLayout>
+        </Console>
+      </Appenders>
+      <Loggers>
+        <Root level="INFO">
+          <AppenderRef ref="Console"/>
+        </Root>
+        <Logger name="org.ballerinalang" level="INFO"/>
+        <Logger name="io.ballerina" level="INFO"/>
+        <Logger name="mcp.ballerina" level="DEBUG"/>
+      </Loggers>
+    </Configuration>
+
+  # Nginx Configuration (for sidecar proxy)
+  nginx.conf: |
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+    
+    events {
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
+    }
+    
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        
+        log_format json_combined escape=json
+          '{'
+            '"time_local":"$time_local",'
+            '"remote_addr":"$remote_addr",'
+            '"remote_user":"$remote_user",'
+            '"request":"$request",'
+            '"status": "$status",'
+            '"body_bytes_sent":"$body_bytes_sent",'
+            '"request_time":"$request_time",'
+            '"http_referrer":"$http_referer",'
+            '"http_user_agent":"$http_user_agent",'
+            '"upstream_response_time":"$upstream_response_time",'
+            '"upstream_addr":"$upstream_addr"'
+          '}';
+        
+        access_log /var/log/nginx/access.log json_combined;
+        
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types
+            text/plain
+            text/css
+            text/xml
+            text/javascript
+            application/json
+            application/javascript
+            application/xml+rss
+            application/atom+xml
+            image/svg+xml;
+        
+        upstream mcp_backend {
+            server localhost:8080;
+            keepalive 32;
+        }
+        
+        server {
+            listen 80;
+            server_name _;
+            
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+            
+            location / {
+                proxy_pass http://mcp_backend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_connect_timeout 30s;
+                proxy_send_timeout 30s;
+                proxy_read_timeout 30s;
+            }
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-ballerina-scripts
+  namespace: mcp-ballerina
+  labels:
+    app.kubernetes.io/name: mcp-ballerina
+    app.kubernetes.io/component: scripts
+    app.kubernetes.io/part-of: mcp-ballerina
+data:
+  entrypoint.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    echo "Starting MCP Ballerina Server..."
+    echo "Pod: ${HOSTNAME}"
+    echo "Namespace: ${POD_NAMESPACE}"
+    echo "Service Account: ${SERVICE_ACCOUNT}"
+    
+    # Wait for dependencies
+    if [ "${WAIT_FOR_DEPS:-true}" = "true" ]; then
+        echo "Waiting for dependencies..."
+        
+        # Wait for database
+        if [ -n "${DATABASE_HOST:-}" ]; then
+            until nc -z "${DATABASE_HOST}" "${DATABASE_PORT:-5432}"; do
+                echo "Waiting for database at ${DATABASE_HOST}:${DATABASE_PORT:-5432}..."
+                sleep 2
+            done
+            echo "Database is ready!"
+        fi
+        
+        # Wait for cache
+        if [ -n "${REDIS_HOST:-}" ]; then
+            until nc -z "${REDIS_HOST}" "${REDIS_PORT:-6379}"; do
+                echo "Waiting for Redis at ${REDIS_HOST}:${REDIS_PORT:-6379}..."
+                sleep 2
+            done
+            echo "Redis is ready!"
+        fi
+    fi
+    
+    # Set up directories
+    mkdir -p /app/logs /app/data /app/temp
+    
+    # Set permissions
+    chown -R app:app /app
+    
+    # Start the application
+    echo "Starting Ballerina application..."
+    exec su-exec app:app bal run /app/mcp-ballerina.jar \
+        --config.file=/config/server.toml \
+        --logging.config=/config/log4j2.xml
+
+  healthcheck.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    # Basic HTTP health check
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health || echo "000")
+    
+    if [ "$HTTP_CODE" -eq 200 ]; then
+        echo "Health check passed (HTTP $HTTP_CODE)"
+        exit 0
+    else
+        echo "Health check failed (HTTP $HTTP_CODE)"
+        exit 1
+    fi
+
+  readiness.sh: |
+    #!/bin/bash
+    set -euo pipefail
+    
+    # Check if application is ready to accept requests
+    READY_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ready || echo "000")
+    
+    if [ "$READY_CODE" -eq 200 ]; then
+        echo "Readiness check passed (HTTP $READY_CODE)"
+        exit 0
+    else
+        echo "Readiness check failed (HTTP $READY_CODE)"
+        exit 1
+    fi

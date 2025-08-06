@@ -1,0 +1,178 @@
+name: 'Close Stale Issues and PRs'
+
+on:
+  schedule:
+    # Run every day at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    name: Mark Stale Issues and PRs
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Close Stale Issues and PRs
+        uses: actions/stale@v8
+        with:
+          # Repository token
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          
+          # Issue configuration
+          stale-issue-message: |
+            This issue has been automatically marked as stale because it has not had recent activity.
+            
+            **What happens next?**
+            - If this issue is still relevant, please comment to keep it open
+            - If no activity occurs within 7 days, this issue will be automatically closed
+            - You can always reopen the issue later if needed
+            
+            Thank you for your contributions to the MCP Ballerina server project! 🚀
+            
+          close-issue-message: |
+            This issue has been automatically closed due to inactivity.
+            
+            **Don't worry!** You can always reopen this issue if it's still relevant.
+            Simply comment on the issue and it will be reopened for further discussion.
+            
+            Thank you for your understanding! 🙏
+            
+          # PR configuration  
+          stale-pr-message: |
+            This pull request has been automatically marked as stale because it has not had recent activity.
+            
+            **What happens next?**
+            - If this PR is still needed, please comment or push new commits to keep it open
+            - If no activity occurs within 7 days, this PR will be automatically closed
+            - You can always reopen the PR later if needed
+            
+            **Before this PR is closed:**
+            - Consider if the changes are still relevant
+            - Rebase if needed to resolve conflicts
+            - Update tests and documentation if required
+            
+            Thank you for your contributions! 🚀
+            
+          close-pr-message: |
+            This pull request has been automatically closed due to inactivity.
+            
+            **Don't worry!** You can always reopen this PR if the changes are still needed.
+            
+            **To reopen:**
+            1. Comment on this PR to reopen it
+            2. Rebase your branch if needed
+            3. Address any review feedback
+            
+            Thank you for your contributions! 🙏
+            
+          # Timing configuration
+          days-before-stale: 30      # Mark as stale after 30 days
+          days-before-close: 7       # Close after 7 more days (37 total)
+          
+          # Labels
+          stale-issue-label: 'stale'
+          stale-pr-label: 'stale'
+          exempt-issue-labels: 'pinned,security,bug,enhancement,good-first-issue'
+          exempt-pr-labels: 'pinned,security,work-in-progress,do-not-merge'
+          
+          # Additional configuration
+          exempt-draft-pr: true      # Don't mark draft PRs as stale
+          enable-statistics: true    # Show statistics in logs
+          operations-per-run: 100    # Limit operations per run
+          
+          # Only process issues and PRs, not milestones
+          only-labels: ''
+          
+          # Remove stale label when there's activity
+          remove-stale-when-updated: true
+
+  cleanup-closed:
+    name: Cleanup Closed Items
+    runs-on: ubuntu-latest
+    needs: stale
+    
+    steps:
+      - name: Remove labels from closed items
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // Remove 'stale' labels from recently closed issues and PRs
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              labels: 'stale',
+              per_page: 50,
+              sort: 'updated',
+              direction: 'desc'
+            });
+            
+            for (const issue of issues) {
+              // Only process items closed in the last 24 hours
+              const closedAt = new Date(issue.closed_at);
+              const yesterday = new Date();
+              yesterday.setDate(yesterday.getDate() - 1);
+              
+              if (closedAt > yesterday) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name: 'stale'
+                });
+                
+                console.log(`Removed 'stale' label from ${issue.pull_request ? 'PR' : 'issue'} #${issue.number}`);
+              }
+            }
+
+  statistics:
+    name: Generate Statistics
+    runs-on: ubuntu-latest
+    needs: stale
+    if: github.event_name == 'schedule'
+    
+    steps:
+      - name: Generate stale items report
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: staleIssues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'stale',
+              state: 'open',
+              per_page: 100
+            });
+            
+            const issues = staleIssues.filter(item => !item.pull_request);
+            const prs = staleIssues.filter(item => item.pull_request);
+            
+            const report = `
+            # Stale Items Report
+            
+            Generated on: ${new Date().toISOString()}
+            
+            ## Summary
+            - **Total stale items**: ${staleIssues.length}
+            - **Stale issues**: ${issues.length}
+            - **Stale PRs**: ${prs.length}
+            
+            ## Stale Issues (${issues.length})
+            ${issues.map(issue => `- [#${issue.number}](${issue.html_url}) - ${issue.title}`).join('\\n')}
+            
+            ## Stale PRs (${prs.length})
+            ${prs.map(pr => `- [#${pr.number}](${pr.html_url}) - ${pr.title}`).join('\\n')}
+            
+            ---
+            *This report is generated automatically by the stale workflow.*
+            `;
+            
+            console.log(report);
+            
+            // Add to workflow summary
+            core.summary.addRaw(report);
+            await core.summary.write();
