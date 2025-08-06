@@ -1,0 +1,28 @@
+[package]
+org = "mcp_ballerina"
+name = "code_analysis_tests"
+version = "1.0.0"
+distribution = "2201.12.6"
+
+[build-options]
+observabilityIncluded = true
+testReport = true
+codeCoverage = true
+
+[[dependency]]
+org = "ballerina"
+name = "test"
+version = "0.0.0"
+
+[[dependency]]
+org = "ballerina"
+name = "io"
+version = "1.6.0"
+
+[[dependency]]
+org = "ballerina"
+name = "time"
+version = "2.4.0"
+
+[platform.java17]
+graalvmCompatible = true
